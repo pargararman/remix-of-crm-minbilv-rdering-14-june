@@ -3,7 +3,8 @@
 // gemensamma save-hooken (useBoringSave). Lokal isSaving, en synlig SaveBar.
 import { useState } from "react";
 import { useServerFn } from "@tanstack/react-start";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useMutation } from "@tanstack/react-query";
+import { toast } from "sonner";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
@@ -11,12 +12,15 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { Send } from "lucide-react";
 import { ExternalButtons } from "./external-buttons";
+import { BlocketValuationResult } from "./blocket-valuation-result";
 import { PricingPanel } from "./pricing-panel";
 import { BrandCombobox } from "./brand-combobox";
 import { ModelCombobox } from "./model-combobox";
 import { CommitTextField, CommitNumberField } from "./commit-inputs";
 import { getVehicle } from "@/lib/vehicle.functions";
 import { getPricing } from "@/lib/pricing.functions";
+import { valuateBlocket } from "@/lib/valuation.functions";
+import type { ValuationResult } from "@/lib/valuation/types";
 import { FUEL_OPTIONS, BODY_TYPE_OPTIONS, GEARBOX_OPTIONS, DRIVE_OPTIONS } from "@/lib/vehicle-enums";
 import { SaveBar } from "./save-bar";
 import { useBoringSave } from "@/hooks/use-boring-save";
@@ -73,6 +77,27 @@ export function QuickValuationPanel({
   const [vehiclePatch, setVehiclePatch] = useState<Record<string, unknown>>({});
   const [pricingPatch, setPricingPatch] = useState<Record<string, unknown>>({});
   const { isSaving, save } = useBoringSave(leadId);
+
+  // Blocket-API-värdering (server-side). Knappen "Blocket" triggar denna.
+  const runValuateBlocket = useServerFn(valuateBlocket);
+  const blocket = useMutation({
+    mutationFn: () => runValuateBlocket({ data: { leadId } }) as Promise<ValuationResult>,
+    onError: () => toast.error("Kunde inte hämta Blocket-värdering."),
+  });
+
+  // "Använd i prissättning": skriv Blocket-spannet till pris-patchen.
+  // Marknad (utannonserat) -> Utpris, est. marknadspris (-5%) -> Inpris (kund-SMS).
+  const applyBlocket = (r: ValuationResult) => {
+    if (!r.ok) return;
+    setPricingPatch((p) => ({
+      ...p,
+      valuation_from: r.soldLow,
+      valuation_to: r.soldHigh,
+      out_price_from: r.marketLow,
+      out_price_to: r.marketHigh,
+    }));
+    toast.success("Blocket-spann infört i prissättningen – kom ihåg att spara.");
+  };
 
   const serverVehicle = (vq.data?.vehicle ?? null) as Vehicle | null;
   const serverPricing = (pq.data?.pricing ?? null) as (Record<string, unknown> & { updated_at?: string | null }) | null;
@@ -134,6 +159,8 @@ export function QuickValuationPanel({
             carInfoPattern={carInfoPattern}
             blocketPattern={blocketPattern}
             biluppgifterPattern={biluppgifterPattern}
+            onBlocketValuate={() => blocket.mutate()}
+            blocketPending={blocket.isPending}
           />
           <div className="ml-auto">
             <TooltipProvider delayDuration={200}>
@@ -153,6 +180,16 @@ export function QuickValuationPanel({
             </TooltipProvider>
           </div>
         </div>
+
+        {(blocket.isPending || blocket.data) && (
+          <BlocketValuationResult
+            result={(blocket.data as ValuationResult) ?? null}
+            isPending={blocket.isPending}
+            isError={blocket.isError}
+            onApply={applyBlocket}
+            onRetry={() => blocket.mutate()}
+          />
+        )}
 
         <section className="space-y-2">
           <h4 className="text-xs font-semibold uppercase text-muted-foreground tracking-wide">Biluppgifter</h4>
