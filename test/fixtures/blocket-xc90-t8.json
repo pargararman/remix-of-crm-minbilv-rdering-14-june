@@ -1,0 +1,18 @@
+{
+  "_comment": "Offline fixture imitating the shape of a Blocket mobility search response for a 2019 Volvo XC90 T8. Used so the eval harness and unit tests run without live network. Prices are plausible 2026 asking prices in SEK; structure (nested price.amount, data array) exercises the defensive parser.",
+  "meta": { "total": 12, "page": 1 },
+  "data": [
+    { "ad_id": "a1", "subject": "Volvo XC90 T8 Polestar AWD Inscription", "price": { "amount": 359000, "suffix": "kr" }, "modelYear": 2019, "mileage": 16200, "share_url": "https://www.blocket.se/annons/a1" },
+    { "ad_id": "a2", "subject": "Volvo XC90 T8 AWD R-Design", "price": { "amount": 369900, "suffix": "kr" }, "modelYear": 2019, "mileage": 15500, "share_url": "https://www.blocket.se/annons/a2" },
+    { "ad_id": "a3", "subject": "Volvo XC90 T8 AWD Inscription 7-sits", "price": { "amount": 379000, "suffix": "kr" }, "modelYear": 2018, "mileage": 18000, "share_url": "https://www.blocket.se/annons/a3" },
+    { "ad_id": "a4", "subject": "Volvo XC90 T8 Polestar AWD", "price": { "amount": 389000, "suffix": "kr" }, "modelYear": 2019, "mileage": 13900, "share_url": "https://www.blocket.se/annons/a4" },
+    { "ad_id": "a5", "subject": "Volvo XC90 T8 AWD Momentum", "price": { "amount": 395000, "suffix": "kr" }, "modelYear": 2019, "mileage": 12400, "share_url": "https://www.blocket.se/annons/a5" },
+    { "ad_id": "a6", "subject": "Volvo XC90 T8 AWD Inscription", "price": { "amount": 409000, "suffix": "kr" }, "modelYear": 2020, "mileage": 11000, "share_url": "https://www.blocket.se/annons/a6" },
+    { "ad_id": "a7", "subject": "Volvo XC90 T8 Recharge AWD", "price": { "amount": 415000, "suffix": "kr" }, "modelYear": 2020, "mileage": 9800, "share_url": "https://www.blocket.se/annons/a7" },
+    { "ad_id": "a8", "subject": "Volvo XC90 T8 AWD Inscription Expression", "price": { "amount": 419000, "suffix": "kr" }, "modelYear": 2019, "mileage": 14100, "share_url": "https://www.blocket.se/annons/a8" },
+    { "ad_id": "a9", "subject": "Volvo XC90 T8 Polestar AWD Bowers&Wilkins", "price": { "amount": 429000, "suffix": "kr" }, "modelYear": 2019, "mileage": 13200, "share_url": "https://www.blocket.se/annons/a9" },
+    { "ad_id": "a10", "subject": "Volvo XC90 T8 AWD Inscription Luftfjädring", "price": { "amount": 445000, "suffix": "kr" }, "modelYear": 2020, "mileage": 8700, "share_url": "https://www.blocket.se/annons/a10" },
+    { "ad_id": "a11", "subject": "Volvo XC90 T8 AWD R-Design Pano", "price": { "amount": 459000, "suffix": "kr" }, "modelYear": 2020, "mileage": 7600, "share_url": "https://www.blocket.se/annons/a11" },
+    { "ad_id": "a12", "subject": "Volvo XC90 T8 Polestar AWD Toppskick", "price": { "amount": 469000, "suffix": "kr" }, "modelYear": 2020, "mileage": 6900, "share_url": "https://www.blocket.se/annons/a12" }
+  ]
+}
