@@ -23,12 +23,14 @@ export const valuateBlocket = createServerFn({ method: "POST" })
     if (!vehicle) {
       return {
         ok: false,
+        dealerCount: 0,
         sampleSize: 0,
+        offerMedian: null,
+        marketMedian: null,
         marketLow: null,
         marketHigh: null,
-        marketMedian: null,
-        soldLow: null,
-        soldHigh: null,
+        cheapest: null,
+        mostExpensive: null,
         confidence: 0,
         query: { q: "", page: 1, sort: "price" },
         note: "Inget fordon registrerat på leadet.",
