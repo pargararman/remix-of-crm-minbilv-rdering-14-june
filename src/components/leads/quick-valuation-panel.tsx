@@ -91,12 +91,12 @@ export function QuickValuationPanel({
     if (!r.ok) return;
     setPricingPatch((p) => ({
       ...p,
-      valuation_from: r.soldLow,
-      valuation_to: r.soldHigh,
+      valuation_from: r.offerMedian,
+      valuation_to: r.marketMedian,
       out_price_from: r.marketLow,
       out_price_to: r.marketHigh,
     }));
-    toast.success("Blocket-spann infört i prissättningen – kom ihåg att spara.");
+    toast.success("Blocket-värdering infört i prissättningen – kom ihåg att spara.");
   };
 
   const serverVehicle = (vq.data?.vehicle ?? null) as Vehicle | null;
@@ -186,6 +186,7 @@ export function QuickValuationPanel({
             result={(blocket.data as ValuationResult) ?? null}
             isPending={blocket.isPending}
             isError={blocket.isError}
+            regnr={regnr}
             onApply={applyBlocket}
             onRetry={() => blocket.mutate()}
           />

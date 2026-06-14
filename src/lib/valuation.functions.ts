@@ -41,7 +41,7 @@ export const valuateBlocket = createServerFn({ method: "POST" })
     // Best-effort timeline row — never block/throw on the audit write.
     queueMicrotask(() => {
       const desc = result.ok
-        ? `Blocket-värdering: ${result.marketLow?.toLocaleString("sv-SE")}–${result.marketHigh?.toLocaleString("sv-SE")} kr (${result.sampleSize} annonser)`
+        ? `Blocket-värdering: ${result.offerMedian?.toLocaleString("sv-SE")} kr (median av ${result.sampleSize} billigaste av ${result.dealerCount} handlarannonser)`
         : `Blocket-värdering misslyckades: ${result.note ?? "okänt fel"}`;
       void context.supabase
         .from("activity_timeline")
@@ -53,11 +53,12 @@ export const valuateBlocket = createServerFn({ method: "POST" })
           actor_type: "seller",
           metadata: {
             ok: result.ok,
+            dealerCount: result.dealerCount,
             sampleSize: result.sampleSize,
+            offerMedian: result.offerMedian,
+            marketMedian: result.marketMedian,
             marketLow: result.marketLow,
             marketHigh: result.marketHigh,
-            soldLow: result.soldLow,
-            soldHigh: result.soldHigh,
             confidence: result.confidence,
             query: result.query,
           } as never,

@@ -1,23 +1,19 @@
-// Blocket valuation provider (built from scratch).
+// Blocket valuation provider.
 //
-// What it does: values a car from the asking prices of comparable LIVE Blocket
-// listings. Asking price is a market signal, not a sold price -- so we take the
-// inter-quartile (25th-75th percentile) band of comps and apply a small
-// asking->sold discount to estimate a realistic market range. That range can
-// then feed the CRM's existing margin/pricing engine to produce a customer offer.
+// Values a car from comparable LIVE Blocket listings. Pipeline:
+//   fetch comps -> keep DEALER ads only -> sort cheapest first -> trim outliers
+//   -> median of the cheapest N = conservative buy-in (offerMedian),
+//   plus marketMedian (all dealers) + cheapest/most-expensive for context.
 //
-// Transport: Blocket's car-search endpoint needs no API key and no token -- only
-// a realistic User-Agent header. It is a plain HTTPS GET, so this runs as a
-// normal server-side fetch (Cloudflare/TanStack backend). No Python needed; the
-// dunderrrrrr/blocket_api repo was only a reference for the request shape.
-//
-// IMPORTANT: keep this SERVER-SIDE. It is an unofficial endpoint that can change
-// or rate-limit, and a browser call would be blocked by CORS anyway.
+// Transport: Blocket's car-search endpoint needs no API key, only a realistic
+// User-Agent. Plain server-side HTTPS GET. Keep this SERVER-SIDE (unofficial
+// endpoint, and a browser call would be CORS-blocked).
 
 import { blocketMakeId } from "./blocket-brands";
 import type {
   BlocketComp,
   BlocketSearchParams,
+  CompRef,
   ProviderOptions,
   ValuationResult,
   ValuationVehicle,
@@ -30,23 +26,25 @@ const DEFAULT_UA =
   "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 " +
   "(KHTML, like Gecko) Chrome/124.0 Safari/537.36";
 
-// CRM gearbox enum -> Blocket transmission code.
 const TRANSMISSION_CODE: Record<string, number> = {
   manuell: 1,
   automatisk: 2,
 };
 
+const DEALER_SAMPLE = 15; // median the cheapest 15 dealer ads
+const OUTLIER_FLOOR = 0.65; // drop ads under 65% of the dealer median
+const MIN_DEALERS = 8; // below this, fall back to all comps
+
 function clampMin0(n: number): number {
   return n < 0 ? 0 : n;
 }
 
-/** Build the normalised Blocket search params for a vehicle + bands. */
 export function buildSearchParams(
   v: ValuationVehicle,
   opts: ProviderOptions = {},
 ): BlocketSearchParams {
   const yearBand = opts.yearBand ?? 1;
-  const mileageBandMil = opts.mileageBandMil ?? 3000; // 3000 mil = 30 000 km
+  const mileageBandMil = opts.mileageBandMil ?? 3000;
 
   const qParts = [v.brand, v.model].filter(
     (s): s is string => !!s && s.trim().length > 0,
@@ -68,11 +66,10 @@ export function buildSearchParams(
     milage_to: hasMileage ? (v.mileage_mil as number) + mileageBandMil : null,
     transmission: transmission ?? null,
     page: 1,
-    sort: "price",
+    sort: "price", // ask Blocket for cheapest-first; we also sort locally
   };
 }
 
-/** Turn normalised params into a query string for the live endpoint. */
 export function toQueryString(p: BlocketSearchParams): string {
   const entries: [string, string | number][] = [];
   const push = (k: string, val: string | number | null | undefined) => {
@@ -93,7 +90,6 @@ export function toQueryString(p: BlocketSearchParams): string {
     .join("&");
 }
 
-/** Default live fetcher: a single server-side HTTPS GET to Blocket. */
 async function liveFetcher(
   params: BlocketSearchParams,
   userAgent: string,
@@ -101,14 +97,9 @@ async function liveFetcher(
   const url = `${BLOCKET_SEARCH_URL}?${toQueryString(params)}`;
   const res = await fetch(url, {
     method: "GET",
-    headers: {
-      "User-Agent": userAgent,
-      Accept: "application/json",
-    },
+    headers: { "User-Agent": userAgent, Accept: "application/json" },
   });
-  if (!res.ok) {
-    throw new Error(`Blocket responded ${res.status} ${res.statusText}`);
-  }
+  if (!res.ok) throw new Error(`Blocket responded ${res.status} ${res.statusText}`);
   return res.json();
 }
 
@@ -128,21 +119,13 @@ function toNumber(x: unknown): number | null {
 const PRICE_KEYS = ["price", "list_price", "amount", "value"];
 const YEAR_KEYS = ["modelYear", "model_year", "year", "regdate"];
 const MILEAGE_KEYS = ["mileage", "milage", "mileage_mil", "milage_mil"];
+const SELLER_KEYS = ["seller_type", "sellerType", "ad_type", "type", "advertiser_type"];
 
 function pickFirst(obj: Record<string, unknown>, keys: string[]): unknown {
-  for (const k of keys) {
-    if (k in obj && obj[k] != null) return obj[k];
-  }
+  for (const k of keys) if (k in obj && obj[k] != null) return obj[k];
   return undefined;
 }
 
-/**
- * Extract a price from a node, handling Blocket's nested price objects, e.g.
- *   { price: { amount: 249000, suffix: "kr" } }  or  { price: 249000 }.
- *
- * If the price lives in a nested object, that object is recorded in
- * `consumed` so the recursive walker won't also count it as a separate listing.
- */
 function extractPrice(
   node: Record<string, unknown>,
   consumed: Set<unknown>,
@@ -157,15 +140,33 @@ function extractPrice(
   return toNumber(raw);
 }
 
+const DEALER_WORDS = ["store", "dealer", "company", "pro", "naringsidkare", "handlare", "foretag"];
+const PRIVATE_WORDS = ["private", "privat"];
+
 /**
- * Recursively walk the response and collect any object that looks like a car
- * listing (has a usable price). Robust to Blocket reshaping `data`/`items`/`ads`.
+ * Detect dealer vs private from whatever Blocket returns. Returns true (dealer),
+ * false (private), or null (no seller info on this listing).
  */
+function detectDealer(obj: Record<string, unknown>): { isDealer: boolean | null; sellerType: string | null } {
+  // 1) explicit seller-type string
+  const rawType = pickFirst(obj, SELLER_KEYS);
+  if (typeof rawType === "string") {
+    const t = rawType.toLowerCase();
+    if (DEALER_WORDS.some((w) => t.includes(w))) return { isDealer: true, sellerType: rawType };
+    if (PRIVATE_WORDS.some((w) => t.includes(w))) return { isDealer: false, sellerType: rawType };
+  }
+  // 2) nested dealer/store object
+  if (obj.dealer || obj.store || obj.shop) return { isDealer: true, sellerType: "store" };
+  // 3) boolean private flag
+  if (typeof obj.private === "boolean") return { isDealer: !obj.private, sellerType: obj.private ? "private" : "store" };
+  if (typeof obj.is_dealer === "boolean") return { isDealer: obj.is_dealer, sellerType: obj.is_dealer ? "store" : "private" };
+  return { isDealer: null, sellerType: null };
+}
+
+/** Recursively collect car-listing-like objects (has a usable price). */
 export function extractComps(payload: unknown): BlocketComp[] {
   const comps: BlocketComp[] = [];
   const seen = new Set<unknown>();
-  // Nested price objects (e.g. {amount, suffix}) consumed by a parent listing,
-  // so the walker never counts them as standalone listings.
   const consumed = new Set<unknown>();
 
   const visit = (node: unknown) => {
@@ -180,42 +181,34 @@ export function extractComps(payload: unknown): BlocketComp[] {
 
     const obj = node as Record<string, unknown>;
     const price = extractPrice(obj, consumed);
-    // Heuristic: a listing has a plausible car price (avoid picking up tiny
-    // fee/option amounts buried elsewhere in the payload).
     if (price != null && price >= 5000 && price <= 5_000_000) {
-      const yearVal = toNumber(pickFirst(obj, YEAR_KEYS));
-      const mileageVal = toNumber(pickFirst(obj, MILEAGE_KEYS));
-      const title =
-        (typeof obj.subject === "string" && obj.subject) ||
-        (typeof obj.title === "string" && obj.title) ||
-        (typeof obj.heading === "string" && obj.heading) ||
-        undefined;
-      const url =
-        (typeof obj.share_url === "string" && obj.share_url) ||
-        (typeof obj.url === "string" && obj.url) ||
-        null;
-      const id =
-        (typeof obj.ad_id === "string" && obj.ad_id) ||
-        (typeof obj.id === "string" && obj.id) ||
-        undefined;
+      const { isDealer, sellerType } = detectDealer(obj);
       comps.push({
-        id,
-        title: title || undefined,
+        id:
+          (typeof obj.ad_id === "string" && obj.ad_id) ||
+          (typeof obj.id === "string" && obj.id) ||
+          undefined,
+        title:
+          (typeof obj.subject === "string" && obj.subject) ||
+          (typeof obj.title === "string" && obj.title) ||
+          (typeof obj.heading === "string" && obj.heading) ||
+          undefined,
         price,
-        year: yearVal,
-        mileage_mil: mileageVal,
-        url,
+        year: toNumber(pickFirst(obj, YEAR_KEYS)),
+        mileage_mil: toNumber(pickFirst(obj, MILEAGE_KEYS)),
+        url:
+          (typeof obj.share_url === "string" && obj.share_url) ||
+          (typeof obj.url === "string" && obj.url) ||
+          null,
+        sellerType,
+        isDealer,
       });
     }
 
-    // Keep walking children regardless, to find nested listing arrays.
-    for (const val of Object.values(obj)) {
-      if (val && typeof val === "object") visit(val);
-    }
+    for (const val of Object.values(obj)) if (val && typeof val === "object") visit(val);
   };
 
   visit(payload);
-  // De-duplicate by id (fall back to price+title) to avoid double counting.
   const byKey = new Map<string, BlocketComp>();
   for (const c of comps) {
     const key = c.id ?? `${c.price}|${c.title ?? ""}`;
@@ -226,7 +219,12 @@ export function extractComps(payload: unknown): BlocketComp[] {
 
 // --- Statistics ------------------------------------------------------------
 
-/** Linear-interpolation percentile (0..1) over a numeric array. */
+export function median(sortedAsc: number[]): number {
+  if (sortedAsc.length === 0) return NaN;
+  const mid = Math.floor(sortedAsc.length / 2);
+  return sortedAsc.length % 2 ? sortedAsc[mid] : (sortedAsc[mid - 1] + sortedAsc[mid]) / 2;
+}
+
 export function percentile(sortedAsc: number[], p: number): number {
   if (sortedAsc.length === 0) return NaN;
   if (sortedAsc.length === 1) return sortedAsc[0];
@@ -234,44 +232,44 @@ export function percentile(sortedAsc: number[], p: number): number {
   const lo = Math.floor(idx);
   const hi = Math.ceil(idx);
   if (lo === hi) return sortedAsc[lo];
-  const frac = idx - lo;
-  return sortedAsc[lo] * (1 - frac) + sortedAsc[hi] * frac;
+  return sortedAsc[lo] * (1 - (idx - lo)) + sortedAsc[hi] * (idx - lo);
 }
 
 function round100(n: number): number {
   return Math.round(n / 100) * 100;
 }
 
+function toRef(c: BlocketComp): CompRef {
+  return { price: round100(c.price), title: c.title, url: c.url ?? null };
+}
+
 // --- Public entry point ----------------------------------------------------
 
-/**
- * Run a Blocket comparable-listings valuation for a vehicle.
- * Network errors never throw: they return `ok: false` with a `note`.
- */
 export async function valuateWithBlocket(
   vehicle: ValuationVehicle,
   opts: ProviderOptions = {},
 ): Promise<ValuationResult> {
-  const askingDiscount = opts.askingDiscount ?? 0.05;
+  const sampleSize = opts.sampleSize ?? DEALER_SAMPLE;
+  const outlierFloor = opts.outlierFloor ?? OUTLIER_FLOOR;
   const params = buildSearchParams(vehicle, opts);
 
   const empty = (note: string): ValuationResult => ({
     ok: false,
+    dealerCount: 0,
     sampleSize: 0,
+    offerMedian: null,
+    marketMedian: null,
     marketLow: null,
     marketHigh: null,
-    marketMedian: null,
-    soldLow: null,
-    soldHigh: null,
+    cheapest: null,
+    mostExpensive: null,
     confidence: 0,
     query: params,
     note,
     comps: [],
   });
 
-  if (!params.q) {
-    return empty("Saknar märke/modell – kan inte söka jämförbara annonser.");
-  }
+  if (!params.q) return empty("Saknar märke/modell – kan inte söka jämförbara annonser.");
 
   let payload: unknown;
   try {
@@ -280,44 +278,69 @@ export async function valuateWithBlocket(
       : () => liveFetcher(params, opts.userAgent ?? DEFAULT_UA);
     payload = await fetcher();
   } catch (err) {
-    return empty(
-      `Blocket-anrop misslyckades: ${err instanceof Error ? err.message : String(err)}`,
-    );
+    return empty(`Blocket-anrop misslyckades: ${err instanceof Error ? err.message : String(err)}`);
   }
 
-  const comps = extractComps(payload);
-  if (comps.length === 0) {
-    return empty("Inga jämförbara annonser hittades.");
+  const all = extractComps(payload);
+  if (all.length === 0) return empty("Inga jämförbara annonser hittades.");
+
+  // 1) DEALER FILTER (fall back to all comps if too few dealers / no seller info).
+  let note: string | undefined;
+  const dealers = all.filter((c) => c.isDealer === true);
+  let used: BlocketComp[];
+  if (dealers.length >= MIN_DEALERS) {
+    used = dealers;
+  } else {
+    used = all;
+    note =
+      dealers.length === 0
+        ? "Inga handlarannonser kunde identifieras – visar alla."
+        : "Få handlarannonser – visar alla.";
   }
 
-  const prices = comps
-    .map((c) => c.price)
-    .filter((n) => Number.isFinite(n))
-    .sort((a, b) => a - b);
+  // 2) SORT cheapest first.
+  used = [...used].sort((a, b) => a.price - b.price);
 
-  const marketLow = round100(percentile(prices, 0.25));
-  const marketHigh = round100(percentile(prices, 0.75));
-  const marketMedian = round100(percentile(prices, 0.5));
+  // 3) OUTLIER TRIM: drop ads under outlierFloor * median of the used set.
+  const medianAll = median(used.map((c) => c.price));
+  const trimmed = used.filter((c) => c.price >= medianAll * outlierFloor);
+  const finalSet = trimmed.length > 0 ? trimmed : used;
 
-  const soldLow = round100(marketLow * (1 - askingDiscount));
-  const soldHigh = round100(marketHigh * (1 - askingDiscount));
+  // 4) SAMPLE = cheapest N. 5) offerMedian = median of sample.
+  const sample = finalSet.slice(0, sampleSize);
+  const samplePrices = sample.map((c) => c.price);
+  const offerMedian = round100(median(samplePrices));
 
-  // Confidence proxy: more comps + tighter spread => higher confidence.
-  const sizeScore = Math.min(1, prices.length / 20); // 20+ comps saturates
+  // 6) marketMedian = median of ALL dealer/used comps (after trim).
+  const marketMedian = round100(median(finalSet.map((c) => c.price)));
+
+  // P25–P75 of the used set (kept for the pricing apply range).
+  const allPrices = finalSet.map((c) => c.price).sort((a, b) => a - b);
+  const marketLow = round100(percentile(allPrices, 0.25));
+  const marketHigh = round100(percentile(allPrices, 0.75));
+
+  // 7) cheapest / most expensive of the used set.
+  const cheapest = toRef(finalSet[0]);
+  const mostExpensive = toRef(finalSet[finalSet.length - 1]);
+
+  // Confidence proxy.
+  const sizeScore = Math.min(1, finalSet.length / 20);
   const spread = marketHigh > 0 ? (marketHigh - marketLow) / marketHigh : 1;
-  const spreadScore = Math.max(0, 1 - spread); // tighter band => closer to 1
-  const confidence = Number((0.6 * sizeScore + 0.4 * spreadScore).toFixed(2));
+  const confidence = Number((0.6 * sizeScore + 0.4 * Math.max(0, 1 - spread)).toFixed(2));
 
   return {
     ok: true,
-    sampleSize: prices.length,
+    dealerCount: finalSet.length,
+    sampleSize: sample.length,
+    offerMedian,
+    marketMedian,
     marketLow,
     marketHigh,
-    marketMedian,
-    soldLow,
-    soldHigh,
+    cheapest,
+    mostExpensive,
     confidence,
     query: params,
-    comps,
+    note,
+    comps: finalSet,
   };
 }

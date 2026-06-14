@@ -22,28 +22,43 @@ export interface BlocketComp {
   year?: number | null;
   mileage_mil?: number | null;
   url?: string | null;
+  /** Raw seller type string from Blocket, if present (e.g. "store", "private"). */
+  sellerType?: string | null;
+  /** True = company/dealer ad, false = private, null = unknown. */
+  isDealer?: boolean | null;
+}
+
+/** Cheapest / most-expensive reference listing for the overview. */
+export interface CompRef {
+  price: number;
+  title?: string;
+  url?: string | null;
 }
 
 /** Result of a valuation run. All prices in SEK. */
 export interface ValuationResult {
   ok: boolean;
-  /** Number of comparable listings that contributed to the range. */
+  /** Number of dealer/company listings used (after filtering). */
+  dealerCount: number;
+  /** Count of listings actually in the cheapest sample used for offerMedian. */
   sampleSize: number;
-  /** Market (asking) range = 25th-75th percentile of comp asking prices. */
+  /** Conservative buy-in signal = median of the cheapest N dealer listings (after outlier trim). */
+  offerMedian: number | null;
+  /** Context = median of ALL dealer listings (not just the cheapest sample). */
+  marketMedian: number | null;
+  /** Legacy/extra range kept for the pricing apply (P-band of the dealer set). */
   marketLow: number | null;
   marketHigh: number | null;
-  /** Median asking price across comps. */
-  marketMedian: number | null;
-  /** Estimated realistic sold range after the asking->sold discount. */
-  soldLow: number | null;
-  soldHigh: number | null;
+  /** Cheapest and most expensive dealer listings, for the overview. */
+  cheapest: CompRef | null;
+  mostExpensive: CompRef | null;
   /** 0..1 confidence proxy derived from sample size and price spread. */
   confidence: number;
   /** Echo of the search that produced this (for debugging / audit). */
   query: BlocketSearchParams;
   /** Human-readable note (errors, fallbacks, warnings). */
   note?: string;
-  /** The comps used, for inspection. */
+  /** All dealer comps used, sorted cheapest first. */
   comps: BlocketComp[];
 }
 
@@ -70,7 +85,9 @@ export interface ProviderOptions {
   yearBand?: number;
   /** Mileage band half-width in mil (default 3000 mil = 30 000 km). */
   mileageBandMil?: number;
-  /** Asking -> sold discount (default 0.05 = 5%). */
-  askingDiscount?: number;
+  /** How many of the cheapest dealer listings to median (default 15). */
+  sampleSize?: number;
+  /** Drop listings priced below this fraction of the dealer median (default 0.65). */
+  outlierFloor?: number;
   userAgent?: string;
 }
