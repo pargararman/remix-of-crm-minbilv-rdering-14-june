@@ -1,5 +1,8 @@
 // Stor overview-panel som visas högst upp på lead-detalj.
 import { Link } from "@tanstack/react-router";
+import { useServerFn } from "@tanstack/react-start";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { toast } from "sonner";
 import { Phone, Mail, MapPin, User, Car, Wallet, Wrench, Calendar, KeyRound } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -7,6 +10,10 @@ import { Button } from "@/components/ui/button";
 import { StageRulesPopover } from "@/components/leads/stage-rules-popover";
 import { LOST_REASONS } from "@/lib/lost-reasons";
 import { ExternalButtons } from "@/components/leads/external-buttons";
+import { BlocketValuationResult } from "@/components/leads/blocket-valuation-result";
+import { valuateBlocket } from "@/lib/valuation.functions";
+import { updatePricing } from "@/lib/pricing.functions";
+import type { ValuationResult } from "@/lib/valuation/types";
 import { formatPhone, formatRelative } from "@/lib/format";
 
 function kr(n: number | null | undefined): string {
