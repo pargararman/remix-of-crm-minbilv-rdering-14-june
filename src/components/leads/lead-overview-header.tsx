@@ -40,6 +40,31 @@ interface Props {
 }
 
 export function LeadOverviewHeader({ lead, vehicle, pricing, settings }: Props) {
+  const qc = useQueryClient();
+  const runValuateBlocket = useServerFn(valuateBlocket);
+  const runUpdatePricing = useServerFn(updatePricing);
+  const blocket = useMutation({
+    mutationFn: () => runValuateBlocket({ data: { leadId: lead.id } }) as Promise<ValuationResult>,
+    onError: () => toast.error("Kunde inte hämta Blocket-värdering."),
+  });
+  const applyMut = useMutation({
+    mutationFn: (r: ValuationResult) =>
+      runUpdatePricing({
+        data: {
+          leadId: lead.id,
+          valuation_from: r.soldLow,
+          valuation_to: r.soldHigh,
+          out_price_from: r.marketLow,
+          out_price_to: r.marketHigh,
+        },
+      }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["pricing", lead.id] });
+      qc.invalidateQueries({ queryKey: ["lead-detail", lead.id] });
+      toast.success("Blocket-spann sparat i prissättningen.");
+    },
+    onError: () => toast.error("Kunde inte spara prissättningen."),
+  });
   return (
     <Card className="border-border">
       <CardContent className="p-4 md:p-5 grid gap-4 md:grid-cols-3">
