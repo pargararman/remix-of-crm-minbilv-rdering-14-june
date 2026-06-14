@@ -163,8 +163,63 @@ function detectDealer(obj: Record<string, unknown>): { isDealer: boolean | null;
   return { isDealer: null, sellerType: null };
 }
 
-/** Recursively collect car-listing-like objects (has a usable price). */
+/**
+ * Map one Blocket `docs` entry to a comp. Blocket's real shape (verified live):
+ *   { ad_id, heading, model_specification, price:{amount}, year, mileage,
+ *     mileage_unit:"SCANDINAVIAN_MILE", dealer_segment:"Företag"|"Privat",
+ *     canonical_url }
+ */
+function mapDoc(d: Record<string, unknown>): BlocketComp | null {
+  const priceObj = d.price as Record<string, unknown> | number | undefined;
+  let price: number | null = null;
+  if (typeof priceObj === "number") price = priceObj;
+  else if (priceObj && typeof priceObj === "object") price = toNumber(priceObj.amount);
+  if (price == null || price < 1000 || price > 5_000_000) return null;
+
+  const seg = typeof d.dealer_segment === "string" ? d.dealer_segment.toLowerCase() : "";
+  const isDealer = seg.includes("företag") || seg.includes("foretag")
+    ? true
+    : seg.includes("privat")
+      ? false
+      : null;
+
+  const heading = typeof d.heading === "string" ? d.heading : "";
+  const spec = typeof d.model_specification === "string" ? d.model_specification : "";
+  const title =
+    (heading && spec ? `${heading} ${spec}` : "") ||
+    (typeof d.facade_title === "string" && d.facade_title) ||
+    heading ||
+    undefined;
+
+  return {
+    id: d.ad_id != null ? String(d.ad_id) : d.id != null ? String(d.id) : undefined,
+    title: title || undefined,
+    price,
+    year: toNumber(d.year),
+    mileage_mil: toNumber(d.mileage), // unit SCANDINAVIAN_MILE == mil, no conversion
+    url: typeof d.canonical_url === "string" ? d.canonical_url : null,
+    sellerType: typeof d.dealer_segment === "string" ? d.dealer_segment : null,
+    isDealer,
+  };
+}
+
+/** Collect car-listing comps. Prefers Blocket's `docs` array; falls back to a
+ * defensive recursive scan for unknown shapes. */
 export function extractComps(payload: unknown): BlocketComp[] {
+  // Primary path: real Blocket response keeps listings in `docs`.
+  if (payload && typeof payload === "object" && Array.isArray((payload as Record<string, unknown>).docs)) {
+    const docs = (payload as Record<string, unknown>).docs as Record<string, unknown>[];
+    const mapped: BlocketComp[] = [];
+    for (const d of docs) {
+      if (d && typeof d === "object") {
+        const c = mapDoc(d);
+        if (c) mapped.push(c);
+      }
+    }
+    if (mapped.length > 0) return mapped;
+  }
+
+  // Fallback: recursive scan (older / unknown shapes).
   const comps: BlocketComp[] = [];
   const seen = new Set<unknown>();
   const consumed = new Set<unknown>();
