@@ -157,7 +157,7 @@ export function LeadOverviewHeader({ lead, vehicle, pricing, settings }: Props) 
               ))}
             </div>
           )}
-          <div className="pt-1">
+          <div className="pt-1 space-y-2">
             <ExternalButtons
               leadId={lead.id}
               regnr={lead.registration_number}
@@ -165,7 +165,18 @@ export function LeadOverviewHeader({ lead, vehicle, pricing, settings }: Props) 
               carInfoPattern={settings?.car_info_url_pattern}
               blocketPattern={settings?.blocket_url_pattern}
               biluppgifterPattern={settings?.biluppgifter_url_pattern}
+              onBlocketValuate={() => blocket.mutate()}
+              blocketPending={blocket.isPending}
             />
+            {(blocket.isPending || blocket.data) && (
+              <BlocketValuationResult
+                result={(blocket.data as ValuationResult) ?? null}
+                isPending={blocket.isPending}
+                isError={blocket.isError}
+                onApply={(r) => applyMut.mutate(r)}
+                onRetry={() => blocket.mutate()}
+              />
+            )}
           </div>
         </div>
 
