@@ -1,5 +1,8 @@
 // Stor overview-panel som visas högst upp på lead-detalj.
 import { Link } from "@tanstack/react-router";
+import { useServerFn } from "@tanstack/react-start";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { toast } from "sonner";
 import { Phone, Mail, MapPin, User, Car, Wallet, Wrench, Calendar, KeyRound } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -7,6 +10,10 @@ import { Button } from "@/components/ui/button";
 import { StageRulesPopover } from "@/components/leads/stage-rules-popover";
 import { LOST_REASONS } from "@/lib/lost-reasons";
 import { ExternalButtons } from "@/components/leads/external-buttons";
+import { BlocketValuationResult } from "@/components/leads/blocket-valuation-result";
+import { valuateBlocket } from "@/lib/valuation.functions";
+import { updatePricing } from "@/lib/pricing.functions";
+import type { ValuationResult } from "@/lib/valuation/types";
 import { formatPhone, formatRelative } from "@/lib/format";
 
 function kr(n: number | null | undefined): string {
@@ -33,6 +40,31 @@ interface Props {
 }
 
 export function LeadOverviewHeader({ lead, vehicle, pricing, settings }: Props) {
+  const qc = useQueryClient();
+  const runValuateBlocket = useServerFn(valuateBlocket);
+  const runUpdatePricing = useServerFn(updatePricing);
+  const blocket = useMutation({
+    mutationFn: () => runValuateBlocket({ data: { leadId: lead.id } }) as Promise<ValuationResult>,
+    onError: () => toast.error("Kunde inte hämta Blocket-värdering."),
+  });
+  const applyMut = useMutation({
+    mutationFn: (r: ValuationResult) =>
+      runUpdatePricing({
+        data: {
+          leadId: lead.id,
+          valuation_from: r.soldLow,
+          valuation_to: r.soldHigh,
+          out_price_from: r.marketLow,
+          out_price_to: r.marketHigh,
+        },
+      }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["pricing", lead.id] });
+      qc.invalidateQueries({ queryKey: ["lead-detail", lead.id] });
+      toast.success("Blocket-spann sparat i prissättningen.");
+    },
+    onError: () => toast.error("Kunde inte spara prissättningen."),
+  });
   return (
     <Card className="border-border">
       <CardContent className="p-4 md:p-5 grid gap-4 md:grid-cols-3">
@@ -125,7 +157,7 @@ export function LeadOverviewHeader({ lead, vehicle, pricing, settings }: Props) 
               ))}
             </div>
           )}
-          <div className="pt-1">
+          <div className="pt-1 space-y-2">
             <ExternalButtons
               leadId={lead.id}
               regnr={lead.registration_number}
@@ -133,7 +165,18 @@ export function LeadOverviewHeader({ lead, vehicle, pricing, settings }: Props) 
               carInfoPattern={settings?.car_info_url_pattern}
               blocketPattern={settings?.blocket_url_pattern}
               biluppgifterPattern={settings?.biluppgifter_url_pattern}
+              onBlocketValuate={() => blocket.mutate()}
+              blocketPending={blocket.isPending}
             />
+            {(blocket.isPending || blocket.data) && (
+              <BlocketValuationResult
+                result={(blocket.data as ValuationResult) ?? null}
+                isPending={blocket.isPending}
+                isError={blocket.isError}
+                onApply={(r) => applyMut.mutate(r)}
+                onRetry={() => blocket.mutate()}
+              />
+            )}
           </div>
         </div>
 
