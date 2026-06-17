@@ -1,7 +1,7 @@
 // Blocket valuation eval / test runner.
 //
 // Runs the Blocket provider against the TNH357 test vehicle and prints the
-// resulting market + estimated-sold range. Two modes:
+// resulting second-cheapest-based customer valuation. Two modes:
 //
 //   LIVE (default): hits the real Blocket endpoint. Run this in YOUR environment
 //   (Cloudflare/local) where blocket.se is reachable.
@@ -72,15 +72,19 @@ async function main() {
     return;
   }
 
-  console.log(`Comparable listings : ${result.sampleSize}`);
-  console.log(`Median asking       : ${sek(result.marketMedian)}`);
-  console.log(
-    `Market range (P25–P75 asking) : ${sek(result.marketLow)} – ${sek(result.marketHigh)}`,
-  );
-  console.log(
-    `Est. sold range (–5% asking)  : ${sek(result.soldLow)} – ${sek(result.soldHigh)}`,
-  );
-  console.log(`Confidence          : ${(result.confidence * 100).toFixed(0)}%`);
+  console.log(`Raw listings         : ${result.totalCount}`);
+  console.log(`Comparable listings  : ${result.comparableCount}`);
+  console.log(`Used listings        : ${result.sampleSize}`);
+  console.log(`Seller split         : dealers=${result.dealerCount}, private=${result.privateCount}, available=${result.sellerTypeAvailable}`);
+  console.log(`Market median        : ${sek(result.marketMedian)}`);
+  console.log(`Market range (P25–P75): ${sek(result.marketLow)} – ${sek(result.marketHigh)}`);
+  if (result.customerOffer) {
+    console.log(`Reference (2nd low)  : ${sek(result.customerOffer.referencePrice)}`);
+    console.log(`Deduction            : ${sek(result.customerOffer.deduction)} (${result.customerOffer.deductionBand})`);
+    console.log(`Customer offer       : ${sek(result.customerOffer.customerOffer)}`);
+    console.log(`Text                 : ${result.customerOffer.explanationText}`);
+  }
+  console.log(`Confidence           : ${(result.confidence * 100).toFixed(0)}%`);
 
   console.log("\nTop comps:");
   for (const c of result.comps.slice(0, 8)) {
