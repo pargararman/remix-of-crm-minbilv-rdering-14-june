@@ -53,7 +53,7 @@ export async function sendSms(input: SendSmsInput): Promise<SendSmsResult> {
       .maybeSingle();
     const { data: pricing } = await supabaseAdmin
       .from("pricing")
-      .select("valuation_from, valuation_to")
+      .select("valuation_from, valuation_to, pricing_notes")
       .eq("lead_id", lead.id)
       .maybeSingle();
     body = resolveTemplate(tpl.body_sv, { lead, vehicle, pricing });

@@ -85,18 +85,20 @@ export function QuickValuationPanel({
     onError: () => toast.error("Kunde inte hämta Blocket-värdering."),
   });
 
-  // "Använd i prissättning": skriv Blocket-spannet till pris-patchen.
-  // Marknad (utannonserat) -> Utpris, est. marknadspris (-5%) -> Inpris (kund-SMS).
+  // "Använd i prissättning": skriv den faktiska kundvärderingen + förklaringen.
+  // Kundvärdering = näst lägsta jämförbara pris - avdrag enligt marginaltabellen.
   const applyBlocket = (r: ValuationResult) => {
-    if (!r.ok) return;
+    if (!r.ok || !r.customerOffer) return;
+    const o = r.customerOffer;
     setPricingPatch((p) => ({
       ...p,
-      valuation_from: r.offerMedian,
-      valuation_to: r.marketMedian,
+      valuation_from: o.customerLow,
+      valuation_to: o.customerHigh,
       out_price_from: r.marketLow,
       out_price_to: r.marketHigh,
+      pricing_notes: o.explanationText,
     }));
-    toast.success("Blocket-värdering infört i prissättningen – kom ihåg att spara.");
+    toast.success("Blocket-värdering införd – kom ihåg att spara.");
   };
 
   const serverVehicle = (vq.data?.vehicle ?? null) as Vehicle | null;

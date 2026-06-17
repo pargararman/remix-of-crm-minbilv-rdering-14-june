@@ -1,6 +1,5 @@
 // Blocket-värdering: resultatpanel som visas under externa knappar.
-// Visar handlarannonser (privatannonser bortfiltrerade), billigast-först,
-// median av de billigaste + marknadsmedian + billigast/dyrast-översikt.
+// Kundvärdering = näst lägsta jämförbara pris minus avdrag enligt marginaltabellen.
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { BarChart3, ArrowDown, RefreshCw, AlertCircle, ExternalLink } from "lucide-react";
@@ -60,7 +59,7 @@ export function BlocketValuationResult({ result, isPending, isError, regnr, onAp
           </span>
         )}
         <span className="text-[11px] rounded px-2 py-0.5 bg-emerald-500/15 text-emerald-700 dark:text-emerald-400">
-          {result.dealerCount} handlarannonser
+          {result.sampleSize} använda · {result.comparableCount} jämförbara · {result.totalCount} träffar
         </span>
         <span className="ml-auto text-[11px] text-muted-foreground">via blocket.se · server-side</span>
       </div>
@@ -69,14 +68,25 @@ export function BlocketValuationResult({ result, isPending, isError, regnr, onAp
         <p className="text-[11px] text-amber-600 dark:text-amber-400">{result.note}</p>
       )}
 
-      <div className="grid grid-cols-2 gap-2">
-        <Metric
-          label={`Värdering (median av ${result.sampleSize} billigaste)`}
-          value={sek(result.offerMedian)}
-          strong
-        />
-        <Metric label="Marknadsmedian (alla handlare)" value={sek(result.marketMedian)} />
-      </div>
+      {result.customerOffer && (
+        <div className="space-y-2">
+          <div className="grid grid-cols-2 gap-2">
+            <Metric
+              label="Kundvärdering (näst billigast − avdrag)"
+              value={sek(result.customerOffer.customerOffer)}
+              strong
+            />
+            <Metric label="Referenspris (näst billigast)" value={sek(result.customerOffer.referencePrice)} />
+          </div>
+          <div className="grid grid-cols-2 gap-2">
+            <Metric label="Avdrag" value={sek(result.customerOffer.deduction)} />
+            <Metric label="Marknadskontext (median)" value={sek(result.marketMedian)} />
+          </div>
+          <p className="rounded-md bg-background p-2 text-[11px] leading-relaxed text-muted-foreground">
+            {result.customerOffer.explanationText}
+          </p>
+        </div>
+      )}
 
       <div className="grid grid-cols-2 gap-2">
         <RefCard label="Billigast" comp={result.cheapest} />
@@ -90,7 +100,7 @@ export function BlocketValuationResult({ result, isPending, isError, regnr, onAp
             className="text-primary hover:underline"
             onClick={() => setShowComps((s) => !s)}
           >
-            {showComps ? "Dölj" : "Visa"} annonser ({result.comps.length})
+            {showComps ? "Dölj" : "Visa"} använda annonser ({result.comps.length})
           </button>
           {showComps && (
             <div className="mt-2 space-y-1">

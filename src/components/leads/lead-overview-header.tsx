@@ -53,19 +53,23 @@ export function LeadOverviewHeader({ lead, vehicle, pricing, settings }: Props) 
   // Header har ingen SaveBar -> "Använd i prissättning" sparar direkt och
   // uppdaterar pris-cachen så hela profilen speglar spannet.
   const apply = useMutation({
-    mutationFn: (r: ValuationResult) =>
-      runUpdatePricing({
+    mutationFn: (r: ValuationResult) => {
+      if (!r.customerOffer) throw new Error("Blocket-värdering saknar kundvärdering");
+      const o = r.customerOffer;
+      return runUpdatePricing({
         data: {
           leadId: lead.id,
-          valuation_from: r.offerMedian,
-          valuation_to: r.marketMedian,
+          valuation_from: o.customerLow,
+          valuation_to: o.customerHigh,
           out_price_from: r.marketLow,
           out_price_to: r.marketHigh,
+          pricing_notes: o.explanationText,
         },
-      }),
+      });
+    },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["pricing", lead.id] });
-      toast.success("Blocket-spann sparat i prissättningen.");
+      toast.success("Blocket-värdering sparad i prissättningen.");
     },
     onError: () => toast.error("Kunde inte spara prissättningen."),
   });

@@ -34,7 +34,7 @@ export const previewTemplate = createServerFn({ method: "POST" })
       registration_number: null,
     };
     let vehicle: { brand: string | null; model: string | null } | null = null;
-    let pricing: { valuation_from: number | null; valuation_to: number | null } | null = null;
+    let pricing: { valuation_from: number | null; valuation_to: number | null; pricing_notes?: string | null } | null = null;
     if (data.leadId) {
       const [{ data: l }, { data: v }, { data: p }] = await Promise.all([
         context.supabase
@@ -45,7 +45,7 @@ export const previewTemplate = createServerFn({ method: "POST" })
         context.supabase.from("vehicles").select("brand, model").eq("lead_id", data.leadId).maybeSingle(),
         context.supabase
           .from("pricing")
-          .select("valuation_from, valuation_to")
+          .select("valuation_from, valuation_to, pricing_notes")
           .eq("lead_id", data.leadId)
           .maybeSingle(),
       ]);
