@@ -13,6 +13,11 @@ import {
   valuateWithBlocket,
 } from "../src/lib/valuation/blocket-provider";
 import { calculateCustomerOffer, deductionForReference } from "../src/lib/valuation/engine";
+import {
+  blocketVehicleFingerprint,
+  getMissingBlocketVehicleFields,
+  isVehicleCompleteForBlocket,
+} from "../src/lib/valuation/vehicle-validation";
 import { TNH357_VEHICLE } from "./fixtures/vehicle-tnh357";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -24,6 +29,128 @@ describe("percentile", () => {
     expect(percentile(xs, 0.5)).toBe(30);
     expect(percentile(xs, 0.25)).toBe(20);
     expect(percentile(xs, 0.75)).toBe(40);
+  });
+});
+
+describe("Blocket vehicle completeness validation", () => {
+  it("does not allow lookup when only brand/model exists", async () => {
+    let called = 0;
+    const vehicle = { brand: "Volvo", model: "XC90" };
+    expect(isVehicleCompleteForBlocket(vehicle)).toBe(false);
+    expect(getMissingBlocketVehicleFields(vehicle)).toEqual([
+      "Version / utförande",
+      "Årsmodell",
+      "Miltal",
+      "Drivmedel",
+      "Växellåda",
+      "Karosstyp",
+      "Drivhjul",
+      "Hästkrafter",
+    ]);
+
+    const r = await valuateWithBlocket(vehicle, {
+      fetcher: async () => {
+        called += 1;
+        return fixture;
+      },
+    });
+    expect(called).toBe(0);
+    expect(r.ok).toBe(false);
+  });
+
+  it("treats dropdown placeholder '-' as missing", async () => {
+    let called = 0;
+    const vehicle = {
+      ...TNH357_VEHICLE,
+      fuel: "-",
+      gearbox: "-",
+      body_type: "-",
+      drive_type: "-",
+    };
+    expect(isVehicleCompleteForBlocket(vehicle)).toBe(false);
+    expect(getMissingBlocketVehicleFields(vehicle)).toEqual(["Drivmedel", "Växellåda", "Karosstyp", "Drivhjul"]);
+
+    const r = await valuateWithBlocket(vehicle, {
+      fetcher: async () => {
+        called += 1;
+        return fixture;
+      },
+    });
+    expect(called).toBe(0);
+    expect(r.ok).toBe(false);
+  });
+
+  it("treats dropdown value 'okant' as missing", () => {
+    const vehicle = {
+      ...TNH357_VEHICLE,
+      fuel: "okant",
+      gearbox: "okant",
+      body_type: "okant",
+      drive_type: "okant",
+    };
+    expect(isVehicleCompleteForBlocket(vehicle)).toBe(false);
+    expect(getMissingBlocketVehicleFields(vehicle)).toEqual(["Drivmedel", "Växellåda", "Karosstyp", "Drivhjul"]);
+  });
+
+  it("does not allow invalid mileage/year/horsepower", async () => {
+    let called = 0;
+    const vehicle = { ...TNH357_VEHICLE, year: 1800, mileage_mil: 0, horsepower: 0 };
+    expect(isVehicleCompleteForBlocket(vehicle)).toBe(false);
+    expect(getMissingBlocketVehicleFields(vehicle)).toEqual(["Årsmodell", "Miltal", "Hästkrafter"]);
+
+    const r = await valuateWithBlocket(vehicle, {
+      fetcher: async () => {
+        called += 1;
+        return fixture;
+      },
+    });
+    expect(called).toBe(0);
+    expect(r.ok).toBe(false);
+  });
+
+  it("allows lookup when all mandatory fields are valid", async () => {
+    let called = 0;
+    expect(isVehicleCompleteForBlocket(TNH357_VEHICLE)).toBe(true);
+    expect(getMissingBlocketVehicleFields(TNH357_VEHICLE)).toEqual([]);
+
+    const r = await valuateWithBlocket(TNH357_VEHICLE, {
+      fetcher: async () => {
+        called += 1;
+        return fixture;
+      },
+    });
+    expect(called).toBe(1);
+    expect(r.ok).toBe(true);
+  });
+
+  it("changes the valuation key when required vehicle fields change", () => {
+    const a = blocketVehicleFingerprint(TNH357_VEHICLE);
+    const b = blocketVehicleFingerprint({ ...TNH357_VEHICLE, mileage_mil: 12816 });
+    expect(a).not.toEqual(b);
+  });
+});
+
+describe("Blocket query building", () => {
+  it("uses complete CRM vehicle fields as Blocket filters", () => {
+    const q = buildSearchParams(TNH357_VEHICLE);
+    expect(q.q).toBe("Volvo XC90 T8 AWD");
+    expect(q.make).toBe("0.818");
+    expect(q.year_from).toBe(2018);
+    expect(q.year_to).toBe(2020);
+    expect(q.milage_from).toBe(11255);
+    expect(q.milage_to).toBe(17255);
+    expect(q.transmission).toBe(2);
+    expect(q.fuel).toBe(1352);
+  });
+
+  it("normalises human fuel/gearbox labels when building Blocket filters", () => {
+    const q = buildSearchParams({
+      ...TNH357_VEHICLE,
+      fuel: "Plug-in Bensin / laddhybrid",
+      gearbox: "Automat",
+    });
+    expect(q.transmission).toBe(2);
+    expect(q.fuel).toBe(1352);
   });
 });
 
@@ -61,8 +188,9 @@ describe("comparable filtering", () => {
   it("filters by model/year/mileage", () => {
     const comps = extractComps(fixture);
     const comparable = filterToComparable(comps, TNH357_VEHICLE);
-    expect(comparable).toHaveLength(8);
+    expect(comparable).toHaveLength(6);
     expect(comparable.every((c) => titleMatchesModel(c.title, "XC90"))).toBe(true);
+    expect(comparable.every((c) => Math.abs((c.mileage_mil ?? 0) - (TNH357_VEHICLE.mileage_mil ?? 0)) <= 3000)).toBe(true);
   });
 });
 
@@ -96,8 +224,8 @@ describe("valuateWithBlocket", () => {
     const r = await valuateWithBlocket(TNH357_VEHICLE, { fetcher: () => Promise.resolve(fixture) });
     expect(r.ok).toBe(true);
     expect(r.totalCount).toBe(12);
-    expect(r.comparableCount).toBe(8);
-    expect(r.sampleSize).toBe(8);
+    expect(r.comparableCount).toBe(6);
+    expect(r.sampleSize).toBe(6);
     expect(r.sellerTypeAvailable).toBe(false);
     expect(r.customerOffer?.referenceRank).toBe(2);
     expect(r.note).toMatch(/Handlare\/privat kunde inte särskiljas/);
@@ -125,7 +253,7 @@ describe("valuateWithBlocket", () => {
   it("refuses bare brand/model leads", async () => {
     const r = await valuateWithBlocket({ brand: "Volvo", model: "XC90" }, { fetcher: () => Promise.resolve(fixture) });
     expect(r.ok).toBe(false);
-    expect(r.note).toMatch(/årsmodell och miltal/);
+    expect(r.note).toMatch(/obligatoriska biluppgifter/);
   });
 
   it("refuses wrong-model results", async () => {

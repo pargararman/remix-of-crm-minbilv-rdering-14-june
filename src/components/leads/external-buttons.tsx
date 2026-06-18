@@ -9,6 +9,7 @@ import {
   blocketReady,
   type VehicleLike,
 } from "@/lib/external-links";
+import { blocketMissingFieldsText } from "@/lib/valuation/vehicle-validation";
 
 interface Props {
   leadId: string;
@@ -33,6 +34,7 @@ export function ExternalButtons({ leadId, regnr, vehicle, carInfoPattern, blocke
   const biluppgifterUrl = buildBiluppgifterUrl(regnr, biluppgifterPattern);
   const blocketUrl = buildBlocketUrl(vehicle, blocketPattern);
   const ready = blocketReady(vehicle);
+  const blocketDisabledReason = ready ? undefined : blocketMissingFieldsText(vehicle);
   const apiMode = typeof onBlocketValuate === "function";
 
   return (
@@ -47,7 +49,7 @@ export function ExternalButtons({ leadId, regnr, vehicle, carInfoPattern, blocke
         ariaLabel={`Öppna biluppgifter.se${regnr ? ` för ${regnr}` : ""}`} />
       {apiMode ? (
         <ExternalLinkLogoButton type="blocket" asButton pending={blocketPending}
-          disabledReason={!ready ? "Fyll i märke, modell, år och miltal först" : undefined}
+          disabledReason={blocketDisabledReason}
           onClick={() => {
             audit({ data: { action: "blocket_valuation_run", leadId } }).catch(() => {});
             onBlocketValuate!();
@@ -55,7 +57,7 @@ export function ExternalButtons({ leadId, regnr, vehicle, carInfoPattern, blocke
           ariaLabel={`Hämta Blocket-värdering${vehicle?.brand ? ` för ${vehicle.brand} ${vehicle.model ?? ""}` : ""}`} />
       ) : (
         <ExternalLinkLogoButton type="blocket" href={blocketUrl}
-          disabledReason={!ready ? "Fyll i märke, modell, år och miltal först" : undefined}
+          disabledReason={blocketDisabledReason}
           onClick={() => { audit({ data: { action: "blocket_opened", leadId } }).catch(() => {}); }}
           ariaLabel={`Öppna Blocket-sökning${vehicle?.brand ? ` för ${vehicle.brand} ${vehicle.model ?? ""}` : ""}`} />
       )}

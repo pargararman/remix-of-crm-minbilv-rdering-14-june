@@ -10,6 +10,7 @@
 
 import { blocketMakeId } from "./blocket-brands";
 import { calculateCustomerOffer } from "./engine";
+import { blocketMissingFieldsText, isVehicleCompleteForBlocket } from "./vehicle-validation";
 import type {
   BlocketComp,
   BlocketSearchParams,
@@ -54,7 +55,27 @@ const SELLER_FIELD_CANDIDATES = [
 
 const TRANSMISSION_CODE: Record<string, number> = {
   manuell: 1,
+  manual: 1,
+  manuel: 1,
   automatisk: 2,
+  automat: 2,
+  automatic: 2,
+};
+
+// Keys are normalized with `norm()` before lookup so both CRM enum values
+// (`plugin_bensin`) and human labels (`Plug-in Bensin / laddhybrid`) work.
+const FUEL_CODE: Record<string, number> = {
+  bensin: 1,
+  diesel: 2,
+  el: 4,
+  hybridbensin: 6,
+  pluginbensin: 1352,
+  pluginbensinladdhybrid: 1352,
+  pluginhybridbensin: 1352,
+  laddhybridbensin: 1352,
+  plugindiesel: 1356,
+  plugindieselladdhybrid: 1356,
+  laddhybriddiesel: 1356,
 };
 
 const DEFAULT_YEAR_BAND = 1;
@@ -82,39 +103,60 @@ function norm(s: string): string {
     .replace(/[^a-z0-9]/g, "");
 }
 
+function lookupCode(map: Record<string, number>, value: string | null | undefined): number | undefined {
+  if (!value) return undefined;
+  const raw = String(value).trim();
+  return map[raw] ?? map[raw.toLowerCase()] ?? map[norm(raw)];
+}
+
+function versionSearchTerms(version: string | null | undefined): string {
+  if (!version) return "";
+  const upper = version.toUpperCase();
+  const terms: string[] = [];
+  const powertrain = upper.match(/\b(T[0-9]|D[0-9]|B[0-9])\b/);
+  if (powertrain) terms.push(powertrain[1]);
+  if (/\bAWD\b|\b4WD\b|FYRHJUL/.test(upper)) terms.push("AWD");
+  if (/RECHARGE|LADDHYBRID|PLUG[ -]?IN/.test(upper)) terms.push("Recharge");
+  return [...new Set(terms)].join(" ");
+}
+
+function driveSearchTerms(driveType: string | null | undefined): string {
+  if (!driveType) return "";
+  const d = String(driveType).toLowerCase();
+  if (d.includes("fyrhjul") || d.includes("awd") || d.includes("4wd")) return "AWD";
+  return "";
+}
+
 export function buildSearchParams(
   v: ValuationVehicle,
   opts: ProviderOptions = {},
 ): BlocketSearchParams {
   const yearBand = opts.yearBand ?? DEFAULT_YEAR_BAND;
   const mileageBandMil = opts.mileageBandMil ?? DEFAULT_MILEAGE_BAND_MIL;
-  const qParts = [v.brand, v.model].filter((s): s is string => !!s && s.trim().length > 0);
+  const qParts = [v.brand, v.model, versionSearchTerms(v.version), driveSearchTerms(v.drive_type)]
+    .filter((s): s is string => !!s && s.trim().length > 0)
+    .flatMap((s) => s.trim().split(/\s+/));
   const hasYear = typeof v.year === "number" && v.year > 1900;
   const hasMileage = typeof v.mileage_mil === "number" && v.mileage_mil >= 0;
-  const transmission = v.gearbox ? TRANSMISSION_CODE[String(v.gearbox)] : undefined;
+  const transmission = lookupCode(TRANSMISSION_CODE, v.gearbox);
+  const fuel = lookupCode(FUEL_CODE, v.fuel);
 
   return {
-    q: qParts.join(" ").trim(),
+    q: [...new Set(qParts)].join(" ").trim(),
     make: blocketMakeId(v.brand),
     year_from: hasYear ? (v.year as number) - yearBand : null,
     year_to: hasYear ? (v.year as number) + yearBand : null,
     milage_from: hasMileage ? clampMin0((v.mileage_mil as number) - mileageBandMil) : null,
     milage_to: hasMileage ? (v.mileage_mil as number) + mileageBandMil : null,
     transmission: transmission ?? null,
+    fuel: fuel ?? null,
     page: 1,
     sort: "price",
   };
 }
 
 export function hasEnoughVehicleSpec(v: ValuationVehicle): boolean {
-  return !!(
-    v.brand?.trim() &&
-    v.model?.trim() &&
-    typeof v.year === "number" &&
-    v.year > 1900 &&
-    typeof v.mileage_mil === "number" &&
-    v.mileage_mil >= 0
-  );
+  return isVehicleCompleteForBlocket(v);
 }
 
 export function toQueryString(p: BlocketSearchParams): string {
@@ -130,6 +172,7 @@ export function toQueryString(p: BlocketSearchParams): string {
   push("milage_from", p.milage_from ?? undefined);
   push("milage_to", p.milage_to ?? undefined);
   push("transmission", p.transmission ?? undefined);
+  push("fuel", p.fuel ?? undefined);
   push("page", p.page);
   push("sort", p.sort);
   return entries.map(([k, val]) => `${encodeURIComponent(k)}=${encodeURIComponent(String(val))}`).join("&");
@@ -280,6 +323,8 @@ export function locateListingArray(payload: unknown): { key: string | null; arr:
 }
 
 function logShapeOnce(payload: unknown, url: string): void {
+  const debug = process.env.BLOCKET_DEBUG === "true" || process.env.BLOCKET_DEBUG === "always";
+  if (!debug) return;
   if (shapeLogged && process.env.BLOCKET_DEBUG !== "always") return;
   shapeLogged = true;
   const located = locateListingArray(payload);
@@ -368,6 +413,40 @@ function matchesFuel(vehicleFuel: string | null | undefined, comp: BlocketComp):
   return true;
 }
 
+function matchesGearbox(vehicleGearbox: string | null | undefined, comp: BlocketComp): boolean {
+  if (!vehicleGearbox) return true;
+  const wanted = norm(vehicleGearbox);
+  const hay = norm(`${comp.gearbox ?? ""} ${comp.title ?? ""}`);
+  // If Blocket does not expose gearbox/listing text, avoid false negatives.
+  if (!hay) return true;
+  const listingMentionsGearbox =
+    hay.includes("automat") || hay.includes("automatic") || hay.includes("manuell") || hay.includes("manual");
+  if (!listingMentionsGearbox) return true;
+
+  if (wanted.includes("automat")) return hay.includes("automat") || hay.includes("automatic");
+  if (wanted.includes("manuell") || wanted.includes("manual")) return hay.includes("manuell") || hay.includes("manual");
+  return true;
+}
+
+function matchesDriveType(vehicleDriveType: string | null | undefined, comp: BlocketComp): boolean {
+  if (!vehicleDriveType) return true;
+  const wanted = norm(vehicleDriveType);
+  const hay = norm(comp.title ?? "");
+  if (!hay) return true;
+
+  const titleMentionsDrive =
+    hay.includes("awd") || hay.includes("4wd") || hay.includes("fyrhjul") ||
+    hay.includes("framhjul") || hay.includes("bakhjul");
+  if (!titleMentionsDrive) return true;
+
+  if (wanted.includes("fyrhjul") || wanted.includes("awd") || wanted.includes("4wd")) {
+    return hay.includes("awd") || hay.includes("4wd") || hay.includes("fyrhjul");
+  }
+  if (wanted.includes("framhjul")) return hay.includes("framhjul");
+  if (wanted.includes("bakhjul")) return hay.includes("bakhjul");
+  return true;
+}
+
 export function filterToComparable(
   comps: BlocketComp[],
   vehicle: ValuationVehicle,
@@ -386,6 +465,8 @@ export function filterToComparable(
       if (!requiredPowertrainTokens.some((t) => title.includes(t))) return false;
     }
     if (!matchesFuel(vehicle.fuel, c)) return false;
+    if (!matchesGearbox(vehicle.gearbox, c)) return false;
+    if (!matchesDriveType(vehicle.drive_type, c)) return false;
     if (hasYear) {
       if (typeof c.year !== "number") return false;
       if (Math.abs(c.year - (vehicle.year as number)) > yearBand) return false;
@@ -464,7 +545,7 @@ export async function valuateWithBlocket(
 
   if (!params.q) return empty("Saknar märke/modell – kan inte söka jämförbara annonser.");
   if (!hasEnoughVehicleSpec(vehicle)) {
-    return empty("För säker Blocket-värdering krävs minst märke, modell, årsmodell och miltal.");
+    return empty(blocketMissingFieldsText(vehicle));
   }
 
   let payload: unknown;

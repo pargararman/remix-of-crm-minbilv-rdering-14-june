@@ -5,6 +5,7 @@ import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
 import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
 import { valuateWithBlocket } from "@/lib/valuation/blocket-provider";
+import { blocketMissingFieldsText, isVehicleCompleteForBlocket } from "@/lib/valuation/vehicle-validation";
 import type { ValuationResult, ValuationVehicle } from "@/lib/valuation/types";
 
 function emptyResult(note: string): ValuationResult {
@@ -36,11 +37,15 @@ export const valuateBlocket = createServerFn({ method: "POST" })
   .handler(async ({ data, context }): Promise<ValuationResult> => {
     const { data: vehicle } = await context.supabase
       .from("vehicles")
-      .select("brand, model, version, year, mileage_mil, fuel, gearbox, drive_type, body_type")
+      .select("brand, model, version, year, mileage_mil, fuel, gearbox, drive_type, body_type, horsepower")
       .eq("lead_id", data.leadId)
       .maybeSingle();
 
     if (!vehicle) return emptyResult("Inget fordon registrerat på leadet.");
+
+    if (!isVehicleCompleteForBlocket(vehicle as ValuationVehicle)) {
+      return emptyResult(blocketMissingFieldsText(vehicle as ValuationVehicle));
+    }
 
     const result = await valuateWithBlocket(vehicle as ValuationVehicle);
 

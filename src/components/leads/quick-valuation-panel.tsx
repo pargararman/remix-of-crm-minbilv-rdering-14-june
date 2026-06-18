@@ -21,6 +21,12 @@ import { getVehicle } from "@/lib/vehicle.functions";
 import { getPricing } from "@/lib/pricing.functions";
 import { valuateBlocket } from "@/lib/valuation.functions";
 import type { ValuationResult } from "@/lib/valuation/types";
+import {
+  BLOCKET_INCOMPLETE_MESSAGE,
+  blocketMissingFieldsText,
+  blocketVehicleFingerprint,
+  isVehicleCompleteForBlocket,
+} from "@/lib/valuation/vehicle-validation";
 import { FUEL_OPTIONS, BODY_TYPE_OPTIONS, GEARBOX_OPTIONS, DRIVE_OPTIONS } from "@/lib/vehicle-enums";
 import { SaveBar } from "./save-bar";
 import { useBoringSave } from "@/hooks/use-boring-save";
@@ -78,12 +84,8 @@ export function QuickValuationPanel({
   const [pricingPatch, setPricingPatch] = useState<Record<string, unknown>>({});
   const { isSaving, save } = useBoringSave(leadId);
 
-  // Blocket-API-värdering (server-side). Knappen "Blocket" triggar denna.
   const runValuateBlocket = useServerFn(valuateBlocket);
-  const blocket = useMutation({
-    mutationFn: () => runValuateBlocket({ data: { leadId } }) as Promise<ValuationResult>,
-    onError: () => toast.error("Kunde inte hämta Blocket-värdering."),
-  });
+  const [lastBlocketKey, setLastBlocketKey] = useState<string | null>(null);
 
   // "Använd i prissättning": skriv den faktiska kundvärderingen + förklaringen.
   // Kundvärdering = näst lägsta jämförbara pris - avdrag enligt marginaltabellen.
@@ -118,8 +120,19 @@ export function QuickValuationPanel({
 
   const canSendOffer = valuationFrom != null && valuationTo != null;
   const liveVehicle: Vehicle = { ...(serverVehicle ?? {}), ...vehiclePatch };
+  const blocketComplete = isVehicleCompleteForBlocket(liveVehicle);
+  const blocketMissingText = blocketMissingFieldsText(liveVehicle);
+  const blocketKey = blocketVehicleFingerprint(liveVehicle);
+  const blocketKeyString = JSON.stringify(blocketKey);
 
-  const handleSave = async () => {
+  // Blocket-API-värdering (server-side). Skippas helt tills obligatoriska fält är kompletta.
+  const blocket = useMutation({
+    mutationKey: ["blocket-valuation", leadId, ...blocketKey],
+    mutationFn: () => runValuateBlocket({ data: { leadId } }) as Promise<ValuationResult>,
+    onError: () => toast.error("Kunde inte hämta Blocket-värdering."),
+  });
+
+  const handleSave = async (): Promise<boolean> => {
     // Snapshot BEFORE saving so edits made during the save survive.
     const vSnap = { ...vehiclePatch };
     const pSnap = { ...pricingPatch };
@@ -127,7 +140,7 @@ export function QuickValuationPanel({
       Object.keys(vSnap).length > 0 ? vSnap : undefined,
       Object.keys(pSnap).length > 0 ? pSnap : undefined,
     );
-    if (!ok) return;
+    if (!ok) return false;
     setVehiclePatch((cur) => {
       const next = { ...cur };
       for (const k of Object.keys(vSnap)) delete next[k];
@@ -138,7 +151,26 @@ export function QuickValuationPanel({
       for (const k of Object.keys(pSnap)) delete next[k];
       return next;
     });
+    return true;
   };
+
+  const handleBlocketValuate = async () => {
+    if (!blocketComplete) {
+      toast.info(blocketMissingText || BLOCKET_INCOMPLETE_MESSAGE);
+      return;
+    }
+    // If vehicle edits are pending locally, persist them first so the server-side lookup
+    // uses the same complete vehicle data the UI just validated.
+    if (Object.keys(vehiclePatch).length > 0) {
+      const ok = await handleSave();
+      if (!ok) return;
+    }
+    setLastBlocketKey(blocketKeyString);
+    blocket.mutate();
+  };
+
+  const showCurrentBlocketResult =
+    blocket.isPending || (blocket.data && lastBlocketKey === blocketKeyString);
 
   return (
     <Card>
@@ -161,8 +193,8 @@ export function QuickValuationPanel({
             carInfoPattern={carInfoPattern}
             blocketPattern={blocketPattern}
             biluppgifterPattern={biluppgifterPattern}
-            onBlocketValuate={() => blocket.mutate()}
-            blocketPending={blocket.isPending}
+            onBlocketValuate={handleBlocketValuate}
+            blocketPending={blocket.isPending || isSaving}
           />
           <div className="ml-auto">
             <TooltipProvider delayDuration={200}>
@@ -183,14 +215,21 @@ export function QuickValuationPanel({
           </div>
         </div>
 
-        {(blocket.isPending || blocket.data) && (
+        {!blocketComplete && (
+          <div className="rounded-md border border-amber-300/60 bg-amber-50 p-3 text-xs text-amber-900 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-200">
+            <p className="font-medium">{BLOCKET_INCOMPLETE_MESSAGE}</p>
+            <p className="mt-1">{blocketMissingText.replace(BLOCKET_INCOMPLETE_MESSAGE, "").trim()}</p>
+          </div>
+        )}
+
+        {showCurrentBlocketResult && (
           <BlocketValuationResult
             result={(blocket.data as ValuationResult) ?? null}
             isPending={blocket.isPending}
             isError={blocket.isError}
             regnr={regnr}
             onApply={applyBlocket}
-            onRetry={() => blocket.mutate()}
+            onRetry={handleBlocketValuate}
           />
         )}
 

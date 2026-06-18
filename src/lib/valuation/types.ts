@@ -12,6 +12,7 @@ export interface ValuationVehicle {
   gearbox?: string | null;
   drive_type?: string | null;
   body_type?: string | null;
+  horsepower?: number | null;
 }
 
 /** A single comparable listing extracted from the Blocket response. */
@@ -104,6 +105,7 @@ export interface BlocketSearchParams {
   milage_from?: number | null; // Blocket spells it "milage", value in mil
   milage_to?: number | null;
   transmission?: number | null; // 1 = manual, 2 = automatic
+  fuel?: number | null;
   page: number;
   sort: string;
 }

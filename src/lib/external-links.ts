@@ -1,5 +1,6 @@
 // Delade hjälpare för car.info / Blocket / biluppgifter-länkar.
 import { blocketBrandSlug } from "./brands";
+import { isVehicleCompleteForBlocket } from "@/lib/valuation/vehicle-validation";
 
 const DEFAULT_CAR_INFO = "https://www.car.info/sv-se/license-plate/S/{REGNR}";
 const DEFAULT_BILUPPGIFTER = "https://biluppgifter.se/fordon/{REGNR}";
@@ -8,12 +9,14 @@ const BLOCKET_BASE = "https://www.blocket.se/mobility/search/car";
 export interface VehicleLike {
   brand?: string | null;
   model?: string | null;
+  version?: string | null;
   year?: number | null;
   mileage_mil?: number | null;
   fuel?: string | null;
   gearbox?: string | null;
   drive_type?: string | null;
   body_type?: string | null;
+  horsepower?: number | null;
 }
 
 export function cleanRegnr(regnr: string | null | undefined): string | null {
@@ -36,11 +39,7 @@ export function buildBiluppgifterUrl(regnr: string | null | undefined, pattern?:
 }
 
 export function blocketReady(v: VehicleLike | null | undefined): boolean {
-  if (!v) return false;
-  const hasNameParts = !!(v.brand && v.model);
-  const hasYear = typeof v.year === "number" && v.year > 1900;
-  const hasMileage = typeof v.mileage_mil === "number" && v.mileage_mil >= 0;
-  return hasNameParts || hasYear || hasMileage;
+  return isVehicleCompleteForBlocket(v);
 }
 
 // Söktermer-mappningar — svenska ord som Blockets fritext-sök förstår.
@@ -126,6 +125,7 @@ export function buildBlocketUrl(
   const qParts = [
     v.brand,
     v.model,
+    v.version,
     fuelCode === undefined ? (FUEL_TERM[String(v.fuel ?? "")] ?? "") : "",
     transmissionCode === undefined
       ? (GEARBOX_TERM[String(v.gearbox ?? "")] ?? "")

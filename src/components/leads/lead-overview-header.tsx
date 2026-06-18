@@ -1,4 +1,5 @@
 // Stor overview-panel som visas högst upp på lead-detalj.
+import { useState } from "react";
 import { Link } from "@tanstack/react-router";
 import { Phone, Mail, MapPin, User, Car, Wallet, Wrench, Calendar, KeyRound } from "lucide-react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
@@ -14,6 +15,12 @@ import { BlocketValuationResult } from "@/components/leads/blocket-valuation-res
 import { valuateBlocket } from "@/lib/valuation.functions";
 import { updatePricing } from "@/lib/pricing.functions";
 import type { ValuationResult } from "@/lib/valuation/types";
+import {
+  BLOCKET_INCOMPLETE_MESSAGE,
+  blocketMissingFieldsText,
+  blocketVehicleFingerprint,
+  isVehicleCompleteForBlocket,
+} from "@/lib/valuation/vehicle-validation";
 import { formatPhone, formatRelative } from "@/lib/format";
 
 function kr(n: number | null | undefined): string {
@@ -43,9 +50,16 @@ export function LeadOverviewHeader({ lead, vehicle, pricing, settings }: Props) 
   const qc = useQueryClient();
   const runValuateBlocket = useServerFn(valuateBlocket);
   const runUpdatePricing = useServerFn(updatePricing);
+  const [lastBlocketKey, setLastBlocketKey] = useState<string | null>(null);
+
+  const blocketComplete = isVehicleCompleteForBlocket(vehicle);
+  const blocketMissingText = blocketMissingFieldsText(vehicle);
+  const blocketKey = blocketVehicleFingerprint(vehicle);
+  const blocketKeyString = JSON.stringify(blocketKey);
 
   // Blocket-API-värdering (server-side). Header-knappen "Blocket" triggar denna.
   const blocket = useMutation({
+    mutationKey: ["blocket-valuation", lead.id, ...blocketKey],
     mutationFn: () => runValuateBlocket({ data: { leadId: lead.id } }) as Promise<ValuationResult>,
     onError: () => toast.error("Kunde inte hämta Blocket-värdering."),
   });
@@ -77,6 +91,18 @@ export function LeadOverviewHeader({ lead, vehicle, pricing, settings }: Props) 
   const applyBlocket = (r: ValuationResult) => {
     if (r.ok) apply.mutate(r);
   };
+
+  const handleBlocketValuate = () => {
+    if (!blocketComplete) {
+      toast.info(blocketMissingText || BLOCKET_INCOMPLETE_MESSAGE);
+      return;
+    }
+    setLastBlocketKey(blocketKeyString);
+    blocket.mutate();
+  };
+
+  const showCurrentBlocketResult =
+    blocket.isPending || (blocket.data && lastBlocketKey === blocketKeyString);
 
   return (
     <Card className="border-border">
@@ -178,11 +204,19 @@ export function LeadOverviewHeader({ lead, vehicle, pricing, settings }: Props) 
               carInfoPattern={settings?.car_info_url_pattern}
               blocketPattern={settings?.blocket_url_pattern}
               biluppgifterPattern={settings?.biluppgifter_url_pattern}
-              onBlocketValuate={() => blocket.mutate()}
+              onBlocketValuate={handleBlocketValuate}
               blocketPending={blocket.isPending}
             />
           </div>
-          {(blocket.isPending || blocket.data) && (
+          {!blocketComplete && (
+            <div className="pt-2">
+              <div className="rounded-md border border-amber-300/60 bg-amber-50 p-3 text-xs text-amber-900 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-200">
+                <p className="font-medium">{BLOCKET_INCOMPLETE_MESSAGE}</p>
+                <p className="mt-1">{blocketMissingText.replace(BLOCKET_INCOMPLETE_MESSAGE, "").trim()}</p>
+              </div>
+            </div>
+          )}
+          {showCurrentBlocketResult && (
             <div className="pt-2">
               <BlocketValuationResult
                 result={(blocket.data as ValuationResult) ?? null}
@@ -190,7 +224,7 @@ export function LeadOverviewHeader({ lead, vehicle, pricing, settings }: Props) 
                 isError={blocket.isError}
                 regnr={lead.registration_number}
                 onApply={applyBlocket}
-                onRetry={() => blocket.mutate()}
+                onRetry={handleBlocketValuate}
               />
             </div>
           )}
