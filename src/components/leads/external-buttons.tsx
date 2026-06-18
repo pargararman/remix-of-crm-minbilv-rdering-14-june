@@ -1,4 +1,4 @@
-// Externa knappar: car.info + biluppgifter + Blocket-värdering.
+// Externa knappar: car.info + biluppgifter + Blocket API-värdering + Blocket-sökning.
 import { useServerFn } from "@tanstack/react-start";
 import { logAuditAction } from "@/lib/settings.functions";
 import { ExternalLinkLogoButton } from "./external-link-logo-button";
@@ -19,12 +19,12 @@ interface Props {
   blocketPattern?: string | null;
   biluppgifterPattern?: string | null;
   /**
-   * When provided, the Blocket button OVERRIDES its link behaviour and triggers
-   * an in-app Blocket-API valuation (server-side) instead of opening a blocket.se
-   * search link. When omitted, the button keeps the legacy link behaviour.
+   * When provided, show a separate Blocket API button that triggers the in-app
+   * server-side valuation. The yellow Blocket.se link remains visible so the
+   * user can manually verify the comparable search in Blocket.
    */
   onBlocketValuate?: () => void;
-  /** Shows a spinner state on the Blocket button while the API call runs. */
+  /** Shows a spinner state on the Blocket API button while the API call runs. */
   blocketPending?: boolean;
 }
 
@@ -47,20 +47,23 @@ export function ExternalButtons({ leadId, regnr, vehicle, carInfoPattern, blocke
         disabledReason={!regnr ? "Inget registreringsnummer" : undefined}
         onClick={() => { audit({ data: { action: "biluppgifter_opened", leadId } }).catch(() => {}); }}
         ariaLabel={`Öppna biluppgifter.se${regnr ? ` för ${regnr}` : ""}`} />
-      {apiMode ? (
+      {apiMode && (
         <ExternalLinkLogoButton type="blocket" asButton pending={blocketPending}
+          label="Blocket API"
+          tone="api"
           disabledReason={blocketDisabledReason}
           onClick={() => {
             audit({ data: { action: "blocket_valuation_run", leadId } }).catch(() => {});
             onBlocketValuate!();
           }}
           ariaLabel={`Hämta Blocket-värdering${vehicle?.brand ? ` för ${vehicle.brand} ${vehicle.model ?? ""}` : ""}`} />
-      ) : (
-        <ExternalLinkLogoButton type="blocket" href={blocketUrl}
-          disabledReason={blocketDisabledReason}
-          onClick={() => { audit({ data: { action: "blocket_opened", leadId } }).catch(() => {}); }}
-          ariaLabel={`Öppna Blocket-sökning${vehicle?.brand ? ` för ${vehicle.brand} ${vehicle.model ?? ""}` : ""}`} />
       )}
+      <ExternalLinkLogoButton type="blocket" href={blocketUrl}
+        label={apiMode ? "Blocket.se" : undefined}
+        tone="external"
+        disabledReason={blocketDisabledReason}
+        onClick={() => { audit({ data: { action: "blocket_opened", leadId } }).catch(() => {}); }}
+        ariaLabel={`Öppna Blocket-sökning${vehicle?.brand ? ` för ${vehicle.brand} ${vehicle.model ?? ""}` : ""}`} />
     </div>
   );
 }
