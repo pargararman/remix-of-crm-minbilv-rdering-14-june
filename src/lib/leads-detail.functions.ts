@@ -19,7 +19,7 @@ export const getLeadDetail = createServerFn({ method: "POST" })
           .maybeSingle(),
         supabase
           .from("vehicles")
-          .select("brand, model, year, mileage_mil, fuel, gearbox, version, horsepower, body_type, service_book, tires, keys_count, condition, damage_notes, inspection_until, equipment_notes, image_urls, selling_timeframe, equipment_package, options")
+          .select("brand, model, year, mileage_mil, fuel, gearbox, version, horsepower, body_type, drive_type, service_book, tires, keys_count, condition, damage_notes, inspection_until, equipment_notes, image_urls, selling_timeframe, equipment_package, options")
           .eq("lead_id", data.leadId)
           .maybeSingle(),
         supabase

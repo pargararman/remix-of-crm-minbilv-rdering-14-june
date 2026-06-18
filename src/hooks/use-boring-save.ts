@@ -61,6 +61,16 @@ export function useBoringSave(leadId: string) {
       console.debug("[lead-valuation-save] success", { ts: Date.now(), leadId });
       if (hasV && result.vehicle) qc.setQueryData(["vehicle", leadId], { vehicle: result.vehicle });
       if (hasP && result.pricing) qc.setQueryData(["pricing", leadId], { pricing: result.pricing });
+      if (result.vehicle || result.pricing) {
+        qc.setQueryData(["lead-detail", leadId], (cur: unknown) => {
+          if (!cur || typeof cur !== "object") return cur;
+          return {
+            ...(cur as Record<string, unknown>),
+            ...(result.vehicle ? { vehicle: result.vehicle } : {}),
+            ...(result.pricing ? { pricing: result.pricing } : {}),
+          };
+        });
+      }
       toast.success("Sparat");
       return true;
     } catch (err) {
