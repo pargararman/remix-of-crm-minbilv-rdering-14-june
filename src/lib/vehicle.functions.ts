@@ -86,7 +86,7 @@ function mergeBiluppgifterPatch(
 
 export const syncVehicleFromBiluppgifter = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((input) => z.object({ leadId: z.string().uuid() }).parse(input))
+  .inputValidator((input) => z.object({ leadId: z.string().uuid(), runValuation: z.boolean().optional() }).parse(input))
   .handler(async ({ data, context }) => {
     const { supabase, userId } = context;
     const [{ data: lead, error: leadError }, { data: currentVehicle }] = await Promise.all([
@@ -122,11 +122,29 @@ export const syncVehicleFromBiluppgifter = createServerFn({ method: "POST" })
       (currentVehicle as Record<string, unknown> | null) ?? null,
       lookup.patch as Record<string, unknown>,
     );
+    let vehicle = currentVehicle;
     if (Object.keys(patch).length === 0) {
-      return { ok: true, changed: 0, vehicle: currentVehicle, warnings: lookup.warnings };
+      if (data.runValuation) {
+        try {
+          const { runAutomaticLeadValuation } = await import("@/lib/valuation/auto-valuation.server");
+          const automaticValuation = await runAutomaticLeadValuation(data.leadId);
+          return { ok: true, changed: 0, vehicle, warnings: lookup.warnings, automaticValuation };
+        } catch (autoErr) {
+          const message = autoErr instanceof Error ? autoErr.message : String(autoErr);
+          await supabase.from("activity_timeline").insert({
+            lead_id: data.leadId,
+            type: "auto_valuation_failed",
+            description: `Automatisk värdering kunde inte köras efter Biluppgifter-sync: ${message}`,
+            actor_id: userId,
+            actor_type: "seller",
+            metadata: { error: message } as never,
+          } as never);
+        }
+      }
+      return { ok: true, changed: 0, vehicle, warnings: lookup.warnings };
     }
 
-    const { data: vehicle, error } = await supabase
+    const { data: savedVehicle, error } = await supabase
       .from("vehicles")
       .upsert({ lead_id: data.leadId, ...patch, updated_at: new Date().toISOString() } as never, {
         onConflict: "lead_id",
@@ -134,6 +152,7 @@ export const syncVehicleFromBiluppgifter = createServerFn({ method: "POST" })
       .select("*")
       .single();
     if (error) throw new Error(error.message);
+    vehicle = savedVehicle;
 
     await supabase.from("activity_timeline").insert({
       lead_id: data.leadId,
@@ -148,6 +167,24 @@ export const syncVehicleFromBiluppgifter = createServerFn({ method: "POST" })
         rawVehicle: lookup.rawVehicle,
       } as never,
     } as never);
+
+    if (data.runValuation) {
+      try {
+        const { runAutomaticLeadValuation } = await import("@/lib/valuation/auto-valuation.server");
+        const automaticValuation = await runAutomaticLeadValuation(data.leadId);
+        return { ok: true, changed: Object.keys(patch).length, vehicle, warnings: lookup.warnings, automaticValuation };
+      } catch (autoErr) {
+        const message = autoErr instanceof Error ? autoErr.message : String(autoErr);
+        await supabase.from("activity_timeline").insert({
+          lead_id: data.leadId,
+          type: "auto_valuation_failed",
+          description: `Automatisk värdering kunde inte köras efter Biluppgifter-sync: ${message}`,
+          actor_id: userId,
+          actor_type: "seller",
+          metadata: { error: message } as never,
+        } as never);
+      }
+    }
 
     return { ok: true, changed: Object.keys(patch).length, vehicle, warnings: lookup.warnings };
   });

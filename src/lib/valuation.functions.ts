@@ -1,6 +1,6 @@
 // Server function for production Blocket valuation.
-// Runs server-side only. Returns market context + customer offer calculated from:
-// second-cheapest comparable listing minus agreed deduction.
+// Runs server-side only. Returns market context + dealer-safe Inpris calculated
+// from lower-market Utpris minus configured margin/buffers.
 import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
 import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
@@ -21,11 +21,20 @@ function emptyResult(note: string): ValuationResult {
     marketMedian: null,
     marketLow: null,
     marketHigh: null,
+    lowerMarketPrice: null,
+    utpris: null,
+    removedCount: 0,
+    fallbackStage: null,
+    searchAttempts: [],
     cheapest: null,
     mostExpensive: null,
     customerOffer: null,
     confidence: 0,
-    query: { q: "", page: 1, sort: "price" },
+    confidenceLevel: "low",
+    dealerAttractivenessScore: 0,
+    sanityChecks: { passed: false, blockers: [note], warnings: [] },
+    smsEligible: false,
+    query: { q: "", page: 1, sort: "PRICE_ASC" },
     note,
     comps: [],
   };
@@ -64,9 +73,9 @@ export const valuateBlocket = createServerFn({ method: "POST" })
     queueMicrotask(() => {
       const offer = result.customerOffer;
       const desc = result.ok && offer
-        ? `Blocket-värdering: kundvärdering ${offer.customerOffer.toLocaleString("sv-SE")} kr ` +
-          `(referens: näst lägsta jämförbara ${offer.referencePrice.toLocaleString("sv-SE")} kr, ` +
-          `avdrag ${offer.deduction.toLocaleString("sv-SE")} kr, ${result.sampleSize} annonser använda)`
+        ? `Blocket-värdering: Utpris ${offer.referencePrice.toLocaleString("sv-SE")} kr, ` +
+          `Inpris ${offer.customerLow.toLocaleString("sv-SE")}–${offer.customerHigh.toLocaleString("sv-SE")} kr ` +
+          `(${result.sampleSize} annonser, ${result.confidenceLevel} confidence)`
         : `Blocket-värdering misslyckades: ${result.note ?? "okänt fel"}`;
 
       void context.supabase
@@ -88,8 +97,17 @@ export const valuateBlocket = createServerFn({ method: "POST" })
             marketMedian: result.marketMedian,
             marketLow: result.marketLow,
             marketHigh: result.marketHigh,
+            lowerMarketPrice: result.lowerMarketPrice,
+            utpris: result.utpris,
+            removedCount: result.removedCount,
+            fallbackStage: result.fallbackStage,
+            searchAttempts: result.searchAttempts,
             customerOffer: result.customerOffer,
             confidence: result.confidence,
+            confidenceLevel: result.confidenceLevel,
+            dealerAttractivenessScore: result.dealerAttractivenessScore,
+            sanityChecks: result.sanityChecks,
+            smsEligible: result.smsEligible,
             query: result.query,
             diagnostics: result.diagnostics,
           } as never,

@@ -79,7 +79,7 @@ export function LeadOverviewHeader({ lead, vehicle, pricing, settings }: Props) 
           in_price_to: o.customerHigh,
           out_price_from: o.referencePrice,
           out_price_to: o.referencePrice,
-          pricing_notes: o.explanationText,
+          pricing_notes: o.customerSmsText,
         },
       });
     },

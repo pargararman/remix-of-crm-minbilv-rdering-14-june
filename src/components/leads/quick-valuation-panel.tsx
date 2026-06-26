@@ -90,8 +90,7 @@ export function QuickValuationPanel({
   const runValuateBlocket = useServerFn(valuateBlocket);
   const [lastBlocketKey, setLastBlocketKey] = useState<string | null>(null);
 
-  // "Använd i prissättning": skriv den faktiska kundvärderingen + förklaringen.
-  // Kundvärdering = näst lägsta jämförbara pris - avdrag enligt marginaltabellen.
+  // "Använd i prissättning": skriv Utpris internt och Inpris som kundspann.
   const applyBlocket = (r: ValuationResult) => {
     if (!r.ok || !r.customerOffer) return;
     const o = r.customerOffer;
@@ -103,7 +102,7 @@ export function QuickValuationPanel({
       in_price_to: o.customerHigh,
       out_price_from: o.referencePrice,
       out_price_to: o.referencePrice,
-      pricing_notes: o.explanationText,
+      pricing_notes: o.customerSmsText,
     }));
     toast.success("Blocket-värdering införd – kom ihåg att spara.");
   };
@@ -113,14 +112,18 @@ export function QuickValuationPanel({
 
   const syncVehicle = useMutation({
     mutationKey: ["biluppgifter-sync", leadId],
-    mutationFn: () => syncBiluppgifter({ data: { leadId } }),
+    mutationFn: () => syncBiluppgifter({ data: { leadId, runValuation: true } }),
     onSuccess: async (res) => {
       if ((res?.changed ?? 0) > 0) {
         setVehiclePatch({});
         toast.success("Biluppgifter hämtade");
       }
+      if (res?.automaticValuation?.status === "auto_priced") {
+        toast.success("Automatisk värdering klar");
+      }
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ["vehicle", leadId] }),
+        queryClient.invalidateQueries({ queryKey: ["pricing", leadId] }),
         queryClient.invalidateQueries({ queryKey: ["lead-detail", leadId] }),
       ]);
     },

@@ -1,5 +1,5 @@
 // Blocket-värdering: resultatpanel som visas under externa knappar.
-// Kundvärdering = näst lägsta jämförbara pris minus avdrag enligt marginaltabellen.
+// Utpris = lower-market dealer resale price. Inpris = customer-facing offer range.
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { BarChart3, ArrowDown, RefreshCw, AlertCircle, ExternalLink } from "lucide-react";
@@ -47,12 +47,12 @@ export function BlocketValuationResult({ result, isPending, isError, regnr, onAp
   }
 
   if (!result) return null;
-  const referenceLabel =
-    result.customerOffer?.referenceRank === 1 ? "Referenspris (billigast)" : "Referenspris (näst billigast)";
-  const offerLabel =
-    result.customerOffer?.referenceRank === 1
-      ? "Kundvärdering (billigast − avdrag)"
-      : "Kundvärdering (näst billigast − avdrag)";
+  const confidenceTone =
+    result.confidenceLevel === "high"
+      ? "bg-emerald-500/15 text-emerald-700 dark:text-emerald-400"
+      : result.confidenceLevel === "medium"
+        ? "bg-amber-500/15 text-amber-700 dark:text-amber-400"
+        : "bg-destructive/10 text-destructive";
 
   return (
     <div className="rounded-md border border-border bg-muted/30 p-3 space-y-3">
@@ -67,6 +67,9 @@ export function BlocketValuationResult({ result, isPending, isError, regnr, onAp
         <span className="text-[11px] rounded px-2 py-0.5 bg-emerald-500/15 text-emerald-700 dark:text-emerald-400">
           {result.sampleSize} använda · {result.comparableCount} jämförbara · {result.totalCount} träffar
         </span>
+        <span className={`text-[11px] rounded px-2 py-0.5 ${confidenceTone}`}>
+          {result.confidenceLevel.toUpperCase()} · stage {result.fallbackStage ?? "—"} · {result.smsEligible ? "SMS OK" : "SMS stopp"}
+        </span>
         <span className="ml-auto text-[11px] text-muted-foreground">via blocket.se · server-side</span>
       </div>
 
@@ -78,19 +81,24 @@ export function BlocketValuationResult({ result, isPending, isError, regnr, onAp
         <div className="space-y-2">
           <div className="grid grid-cols-2 gap-2">
             <Metric
-              label={offerLabel}
-              value={sek(result.customerOffer.customerOffer)}
+              label="Inpris till kund"
+              value={`${sek(result.customerOffer.customerLow)}–${sek(result.customerOffer.customerHigh)}`}
               strong
             />
-            <Metric label={referenceLabel} value={sek(result.customerOffer.referencePrice)} />
+            <Metric label="Utpris internt" value={sek(result.customerOffer.referencePrice)} />
           </div>
           <div className="grid grid-cols-2 gap-2">
-            <Metric label="Avdrag" value={sek(result.customerOffer.deduction)} />
+            <Metric label="Total marginal/buffert" value={sek(result.customerOffer.deduction)} />
             <Metric label="Marknadskontext (median)" value={sek(result.marketMedian)} />
           </div>
           <p className="rounded-md bg-background p-2 text-[11px] leading-relaxed text-muted-foreground">
             {result.customerOffer.explanationText}
           </p>
+          {!result.smsEligible && result.sanityChecks.blockers.length > 0 && (
+            <p className="rounded-md bg-destructive/5 border border-destructive/20 p-2 text-[11px] leading-relaxed text-destructive">
+              Auto-SMS stoppas: {result.sanityChecks.blockers.join(" ")}
+            </p>
+          )}
         </div>
       )}
 

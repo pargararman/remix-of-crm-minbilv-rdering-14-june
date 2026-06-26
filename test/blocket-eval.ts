@@ -1,7 +1,7 @@
 // Blocket valuation eval / test runner.
 //
 // Runs the Blocket provider against the TNH357 test vehicle and prints the
-// resulting second-cheapest-based customer valuation. Two modes:
+// resulting lower-market Utpris and dealer-safe Inpris valuation. Two modes:
 //
 //   LIVE (default): hits the real Blocket endpoint. Run this in YOUR environment
 //   (Cloudflare/local) where blocket.se is reachable.
@@ -79,12 +79,13 @@ async function main() {
   console.log(`Market median        : ${sek(result.marketMedian)}`);
   console.log(`Market range (P25–P75): ${sek(result.marketLow)} – ${sek(result.marketHigh)}`);
   if (result.customerOffer) {
-    console.log(`Reference (2nd low)  : ${sek(result.customerOffer.referencePrice)}`);
-    console.log(`Deduction            : ${sek(result.customerOffer.deduction)} (${result.customerOffer.deductionBand})`);
-    console.log(`Customer offer       : ${sek(result.customerOffer.customerOffer)}`);
+    console.log(`Utpris               : ${sek(result.customerOffer.referencePrice)}`);
+    console.log(`Total deduction      : ${sek(result.customerOffer.deduction)} (${result.customerOffer.deductionBand})`);
+    console.log(`Inpris range         : ${sek(result.customerOffer.customerLow)} – ${sek(result.customerOffer.customerHigh)}`);
     console.log(`Text                 : ${result.customerOffer.explanationText}`);
   }
-  console.log(`Confidence           : ${(result.confidence * 100).toFixed(0)}%`);
+  console.log(`Confidence           : ${result.confidenceLevel} (${(result.confidence * 100).toFixed(0)}%)`);
+  console.log(`SMS eligible         : ${result.smsEligible ? "yes" : "no"}`);
 
   console.log("\nTop comps:");
   for (const c of result.comps.slice(0, 8)) {

@@ -31,6 +31,23 @@ export interface BlocketComp {
   isDealer?: boolean | null;
 }
 
+export type ValuationConfidenceLevel = "high" | "medium" | "low";
+
+export interface SearchAttemptSummary {
+  stage: number;
+  label: string;
+  query: BlocketSearchParams;
+  totalCount: number;
+  comparableCount: number;
+  dealerCount: number;
+  privateCount: number;
+  validCount: number;
+  removedCount: number;
+  sellerTypeAvailable: boolean;
+  relaxedVersion: boolean;
+  makeFilterRemoved?: boolean;
+}
+
 /** Cheapest / most-expensive reference listing for the overview. */
 export interface CompRef {
   price: number;
@@ -40,7 +57,7 @@ export interface CompRef {
 
 export interface CustomerOfferResult {
   referencePrice: number;
-  referenceRank: 1 | 2;
+  referenceRank: number;
   referenceListing: CompRef;
   deduction: number;
   deductionBand: string;
@@ -48,6 +65,16 @@ export interface CustomerOfferResult {
   customerLow: number;
   customerHigh: number;
   dealerOutPrice: number;
+  dealerMarginTarget: number;
+  reconditioningBuffer: number;
+  riskBuffer: number;
+  adminTransportBuffer: number;
+  negotiationBuffer: number;
+  totalDeduction: number;
+  lowerMarketPrice: number;
+  marketMedian: number | null;
+  confidenceLevel: ValuationConfidenceLevel;
+  customerSmsText: string;
   explanationText: string;
 }
 
@@ -73,6 +100,16 @@ export interface ValuationResult {
   /** Context range of used comparable listing prices. */
   marketLow: number | null;
   marketHigh: number | null;
+  /** Lower-market resale/listing price basis before margin deduction. */
+  lowerMarketPrice: number | null;
+  /** Internal dealer resale/listing price saved as Utpris. */
+  utpris: number | null;
+  /** Number of parsed comparables removed by quality/outlier filters. */
+  removedCount: number;
+  /** Fallback stage used for the valuation (1-4), if any search ran. */
+  fallbackStage: number | null;
+  /** All search attempts considered before the selected result. */
+  searchAttempts: SearchAttemptSummary[];
   /** Cheapest and most expensive used listings, for the overview. */
   cheapest: CompRef | null;
   mostExpensive: CompRef | null;
@@ -80,6 +117,14 @@ export interface ValuationResult {
   customerOffer: CustomerOfferResult | null;
   /** 0..1 confidence proxy derived from sample size and price spread. */
   confidence: number;
+  confidenceLevel: ValuationConfidenceLevel;
+  dealerAttractivenessScore: number;
+  sanityChecks: {
+    passed: boolean;
+    blockers: string[];
+    warnings: string[];
+  };
+  smsEligible: boolean;
   /** Echo of the search that produced this (for debugging / audit). */
   query: BlocketSearchParams;
   /** Human-readable note (errors, fallbacks, warnings). */
@@ -123,5 +168,9 @@ export interface ProviderOptions {
   allowSingleComparable?: boolean;
   /** Fixed dealer margin/admin deduction in SEK. Falls back to the legacy band table when omitted. */
   marginAmount?: number | null;
+  reconditioningBuffer?: number | null;
+  riskBuffer?: number | null;
+  adminTransportBuffer?: number | null;
+  negotiationBuffer?: number | null;
   userAgent?: string;
 }

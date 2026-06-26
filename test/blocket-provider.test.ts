@@ -120,8 +120,9 @@ describe("Blocket vehicle completeness validation", () => {
         return fixture;
       },
     });
-    expect(called).toBe(1);
+    expect(called).toBe(3);
     expect(r.ok).toBe(true);
+    expect(r.fallbackStage).toBe(3);
   });
 
   it("changes the valuation key when required vehicle fields change", () => {
@@ -211,10 +212,10 @@ describe("Blocket query building", () => {
     const q = buildSearchParams(TNH357_VEHICLE);
     expect(q.q).toBe("Volvo XC90 T8 AWD");
     expect(q.make).toBe("0.818");
-    expect(q.year_from).toBe(2018);
-    expect(q.year_to).toBe(2020);
-    expect(q.milage_from).toBe(11255);
-    expect(q.milage_to).toBe(17255);
+    expect(q.year_from).toBe(2019);
+    expect(q.year_to).toBe(2021);
+    expect(q.milage_from).toBe(13755);
+    expect(q.milage_to).toBe(15255);
     expect(q.transmission).toBe(2);
     expect(q.fuel).toBe(1352);
     expect(q.sort).toBe("PRICE_ASC");
@@ -265,27 +266,38 @@ describe("comparable filtering", () => {
   it("filters by model/year/mileage", () => {
     const comps = extractComps(fixture);
     const comparable = filterToComparable(comps, TNH357_VEHICLE);
-    expect(comparable).toHaveLength(6);
+    expect(comparable).toHaveLength(2);
     expect(comparable.every((c) => titleMatchesModel(c.title, "XC90"))).toBe(true);
-    expect(comparable.every((c) => Math.abs((c.mileage_mil ?? 0) - (TNH357_VEHICLE.mileage_mil ?? 0)) <= 3000)).toBe(true);
+    expect(comparable.every((c) => (c.year ?? 0) >= 2019 && (c.year ?? 0) <= 2021)).toBe(true);
+    expect(comparable.every((c) => (c.mileage_mil ?? 0) >= 13755 && (c.mileage_mil ?? 0) <= 15255)).toBe(true);
   });
 });
 
-describe("second-cheapest offer engine", () => {
-  it("uses second cheapest minus band-based deduction", () => {
+describe("dealer-safe offer engine", () => {
+  it("uses lower-market Utpris minus margin and operating buffers", () => {
     const offer = calculateCustomerOffer([
       { price: 320000, title: "A" },
       { price: 333000, title: "B" },
       { price: 345000, title: "C" },
       { price: 360000, title: "D" },
+      { price: 390000, title: "E" },
     ]);
     expect(offer?.referencePrice).toBe(333000);
-    expect(offer?.deduction).toBe(40000);
-    expect(offer?.customerOffer).toBe(293000);
-    expect(offer?.explanationText).toContain("näst lägsta");
+    expect(offer?.dealerMarginTarget).toBe(40000);
+    expect(offer?.reconditioningBuffer).toBe(4000);
+    expect(offer?.riskBuffer).toBe(2000);
+    expect(offer?.adminTransportBuffer).toBe(1000);
+    expect(offer?.negotiationBuffer).toBe(1000);
+    expect(offer?.deduction).toBe(48000);
+    expect(offer?.customerOffer).toBe(285000);
+    expect(offer?.customerLow).toBe(283000);
+    expect(offer?.customerHigh).toBe(288000);
+    expect(offer?.customerSmsText).toContain("handlarnätverk");
+    expect(offer?.customerSmsText).not.toContain("333 000");
+    expect(offer?.explanationText).toContain("Utpris");
     expect(offer?.explanationText).toContain("333 000 kr");
-    expect(offer?.explanationText).toContain("40 000 kr");
-    expect(offer?.explanationText).toContain("293 000 kr");
+    expect(offer?.explanationText).toContain("48 000 kr");
+    expect(offer?.explanationText).toContain("285 000 kr");
   });
 
   it("uses agreed margin bands", () => {
@@ -300,13 +312,17 @@ describe("second-cheapest offer engine", () => {
       [
         { price: 320000, title: "A" },
         { price: 333000, title: "B" },
+        { price: 345000, title: "C" },
+        { price: 360000, title: "D" },
+        { price: 390000, title: "E" },
       ],
       { marginAmount: 55000 },
     );
     expect(offer?.referencePrice).toBe(333000);
-    expect(offer?.deduction).toBe(55000);
-    expect(offer?.customerOffer).toBe(278000);
-    expect(offer?.deductionBand).toContain("admininställd marginal");
+    expect(offer?.dealerMarginTarget).toBe(55000);
+    expect(offer?.deduction).toBe(63000);
+    expect(offer?.customerOffer).toBe(270000);
+    expect(offer?.deductionBand).toContain("admininställd bruttomarginal");
   });
 
   it("can fall back to the cheapest listing when explicitly allowed", () => {
@@ -316,8 +332,8 @@ describe("second-cheapest offer engine", () => {
     });
     expect(offer?.referenceRank).toBe(1);
     expect(offer?.referencePrice).toBe(320000);
-    expect(offer?.customerOffer).toBe(280000);
-    expect(offer?.explanationText).toContain("det lägsta jämförbara priset");
+    expect(offer?.customerOffer).toBe(272000);
+    expect(offer?.explanationText).toContain("billigaste giltiga annonsen");
   });
 });
 
@@ -326,10 +342,17 @@ describe("valuateWithBlocket", () => {
     const r = await valuateWithBlocket(TNH357_VEHICLE, { fetcher: () => Promise.resolve(fixture) });
     expect(r.ok).toBe(true);
     expect(r.totalCount).toBe(12);
-    expect(r.comparableCount).toBe(6);
-    expect(r.sampleSize).toBe(6);
+    expect(r.comparableCount).toBe(5);
+    expect(r.sampleSize).toBe(5);
+    expect(r.fallbackStage).toBe(3);
+    expect(r.searchAttempts.map((a) => a.validCount)).toEqual([2, 3, 5]);
     expect(r.sellerTypeAvailable).toBe(false);
-    expect(r.customerOffer?.referenceRank).toBe(2);
+    expect(r.customerOffer?.referenceRank).toBe(3);
+    expect(r.confidenceLevel).toBe("low");
+    expect(r.smsEligible).toBe(false);
+    expect(r.sanityChecks.blockers).toEqual(
+      expect.arrayContaining(["Blocket-svaret kunde inte säkert särskilja handlarannonser från privatannonser."]),
+    );
     expect(r.note).toMatch(/Handlare\/privat kunde inte särskiljas/);
   });
 
@@ -350,6 +373,95 @@ describe("valuateWithBlocket", () => {
     expect(r.dealerCount).toBe(3);
     expect(r.privateCount).toBe(1);
     expect(r.comps.every((c) => c.isDealer === true)).toBe(true);
+  });
+
+  it("allows automatic SMS for high-confidence dealer-safe valuations", async () => {
+    const mk = (i: number, price: number) => ({
+      ad_id: String(i),
+      subject: "Volvo XC90 T8 AWD",
+      price: { amount: price },
+      modelYear: 2019,
+      mileage: 14200 + i * 20,
+      dealer_segment: "Företag",
+    });
+    const r = await valuateWithBlocket(TNH357_VEHICLE, {
+      fetcher: () => Promise.resolve({ data: [mk(1, 200000), mk(2, 205000), mk(3, 210000), mk(4, 215000), mk(5, 220000)] }),
+    });
+
+    expect(r.ok).toBe(true);
+    expect(r.fallbackStage).toBe(1);
+    expect(r.confidenceLevel).toBe("high");
+    expect(r.smsEligible).toBe(true);
+    expect(r.customerOffer?.referencePrice).toBe(205000);
+    expect(r.customerOffer?.customerLow).toBe(155000);
+    expect(r.customerOffer?.customerHigh).toBe(160000);
+  });
+
+  it("allows conservative medium-confidence valuations from 3 dealer comparables", async () => {
+    const mk = (i: number, price: number) => ({
+      ad_id: String(i),
+      subject: "Volvo XC90 T8 AWD",
+      price: { amount: price },
+      modelYear: 2019,
+      mileage: 14200 + i * 20,
+      dealer_segment: "Företag",
+    });
+    const r = await valuateWithBlocket(TNH357_VEHICLE, {
+      fetcher: () => Promise.resolve({ data: [mk(1, 200000), mk(2, 205000), mk(3, 210000)] }),
+    });
+
+    expect(r.ok).toBe(true);
+    expect(r.sampleSize).toBe(3);
+    expect(r.confidenceLevel).toBe("medium");
+    expect(r.smsEligible).toBe(true);
+  });
+
+  it("blocks low-confidence valuations when fewer than 3 comparables remain", async () => {
+    const oneDealer = {
+      data: [
+        {
+          ad_id: "1",
+          subject: "Volvo XC90 T8 AWD",
+          price: { amount: 399000 },
+          modelYear: 2019,
+          mileage: 14000,
+          dealer_segment: "Företag",
+        },
+      ],
+    };
+    const r = await valuateWithBlocket(TNH357_VEHICLE, { fetcher: () => Promise.resolve(oneDealer) });
+    expect(r.ok).toBe(false);
+    expect(r.confidenceLevel).toBe("low");
+    expect(r.smsEligible).toBe(false);
+    expect(r.note).toMatch(/För få giltiga jämförbara/);
+  });
+
+  it("removes damaged/non-comparable ads before pricing", async () => {
+    const mk = (i: number, price: number, suffix = "") => ({
+      ad_id: String(i),
+      subject: `Volvo XC90 T8 AWD ${suffix}`.trim(),
+      price: { amount: price },
+      modelYear: 2019,
+      mileage: 14200 + i * 20,
+      dealer_segment: "Företag",
+    });
+    const r = await valuateWithBlocket(TNH357_VEHICLE, {
+      fetcher: () => Promise.resolve({
+        data: [
+          mk(1, 120000, "defekt"),
+          mk(2, 200000),
+          mk(3, 205000),
+          mk(4, 210000),
+          mk(5, 215000),
+          mk(6, 220000),
+        ],
+      }),
+    });
+
+    expect(r.ok).toBe(true);
+    expect(r.sampleSize).toBe(5);
+    expect(r.removedCount).toBe(1);
+    expect(r.customerOffer?.referencePrice).toBe(205000);
   });
 
   it("allows one dealer listing only when fallback mode is enabled", async () => {
@@ -376,8 +488,10 @@ describe("valuateWithBlocket", () => {
     expect(allowed.ok).toBe(true);
     expect(allowed.customerOffer?.referenceRank).toBe(1);
     expect(allowed.customerOffer?.referencePrice).toBe(399000);
-    expect(allowed.customerOffer?.customerOffer).toBe(349000);
-    expect(allowed.note).toMatch(/Endast en annons/);
+    expect(allowed.customerOffer?.customerOffer).toBe(341000);
+    expect(allowed.confidenceLevel).toBe("low");
+    expect(allowed.smsEligible).toBe(false);
+    expect(allowed.note).toMatch(/Auto-SMS blockerat/);
   });
 
   it("refuses bare brand/model leads", async () => {
@@ -391,6 +505,6 @@ describe("valuateWithBlocket", () => {
       fetcher: () => Promise.resolve({ data: [{ ad_id: "1", subject: "Volvo XC60 Recharge", price: { amount: 450000 }, modelYear: 2019, mileage: 14000 }] }),
     });
     expect(r.ok).toBe(false);
-    expect(r.note).toMatch(/För få jämförbara/);
+    expect(r.note).toMatch(/För få giltiga jämförbara/);
   });
 });

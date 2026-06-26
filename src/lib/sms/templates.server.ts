@@ -24,8 +24,13 @@ function fallbackValuationText(ctx: ResolveCtx): string {
   if (ctx.pricing?.pricing_notes?.trim()) return ctx.pricing.pricing_notes.trim();
   const from = fmtAmount(ctx.pricing?.valuation_from);
   const to = fmtAmount(ctx.pricing?.valuation_to);
-  if (from !== "___" && to !== "___") return `Uppskattad kundvärdering: ${from}–${to} kr.`;
-  return "Vi återkommer med en uppskattad kundvärdering efter genomgång av bilen.";
+  if (from !== "___" && to !== "___") {
+    return (
+      `Baserat på bilens uppgifter och aktuella jämförbara annonser uppskattar vi att vårt handlarnätverk ` +
+      `kan erbjuda cirka ${from}–${to} kr för din bil. Slutligt pris beror på skick, servicehistorik och genomgång av bilen.`
+    );
+  }
+  return "Vi återkommer med en uppskattning efter genomgång av bilen.";
 }
 
 export function resolveTemplate(body: string, ctx: ResolveCtx): string {
