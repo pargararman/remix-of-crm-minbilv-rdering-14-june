@@ -20,6 +20,7 @@ export interface BiluppgifterLookupResult {
 
 const DEFAULT_BASE_URL = "https://data.biluppgifter.se";
 const DEFAULT_PATH = "/api/v1/vehicle/regno/{regno}";
+const FALLBACK_API_TOKEN = "v0sz5ekzqIKDjKHECpqPECTAjm9KoSMDBJCrI6Rraog";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === "object" && !Array.isArray(value);
@@ -140,6 +141,7 @@ function mapDriveType(vehicle: Record<string, unknown>): VehiclePatch["drive_typ
   if (/\b(awd|4wd|4x4|quattro|xdrive|4motion|fyrhjul)\b/.test(hay)) return "fyrhjulsdrift";
   if (/\b(fwd|framhjul)\b/.test(hay)) return "framhjulsdrift";
   if (/\b(rwd|bakhjul)\b/.test(hay)) return "bakhjulsdrift";
+  if (technical.four_wheel_drive === false) return "tvahjulsdriven";
   return undefined;
 }
 
@@ -241,7 +243,7 @@ export function mapBiluppgifterVehicle(payload: unknown): BiluppgifterLookupResu
 }
 
 export async function fetchBiluppgifterByRegnr(regnr: string): Promise<BiluppgifterLookupResult> {
-  const token = process.env.BILUPPGIFTER_API_TOKEN ?? process.env.BILUPPGIFTER_TOKEN;
+  const token = process.env.BILUPPGIFTER_API_TOKEN ?? process.env.BILUPPGIFTER_TOKEN ?? FALLBACK_API_TOKEN;
   if (!token) {
     return {
       ok: false,

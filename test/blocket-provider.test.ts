@@ -171,6 +171,39 @@ describe("Biluppgifter CRM mapping", () => {
       horsepower: 303,
     });
   });
+
+  it("maps explicit non-AWD Biluppgifter vehicles as two-wheel drive when axle side is unknown", () => {
+    const r = mapBiluppgifterVehicle({
+      vehicle: {
+        regnr: "DFP56K",
+        make: "Skoda",
+        model: "Octavia IV Combi",
+        market_name: "Škoda Octavia IV Combi (NX5, PV5) 1.4 TSI RS IV",
+        model_year: 2021,
+        meter: 85297,
+        transmission: "Automat",
+        technical: {
+          electric_vehicle_configuration: "Laddhybrid",
+          four_wheel_drive: false,
+          chassi: ["StationsvagnKombivagn"],
+          drive: [
+            { fuel: "Bensin", power_hp: 149 },
+            { fuel: "El", power_hp: 108 },
+          ],
+        },
+        power_hp: 245,
+      },
+    });
+
+    expect(r.ok).toBe(true);
+    expect(r.patch).toMatchObject({
+      fuel: "plugin_bensin",
+      gearbox: "automatisk",
+      drive_type: "tvahjulsdriven",
+      body_type: "kombi",
+      horsepower: 245,
+    });
+  });
 });
 
 describe("Blocket query building", () => {
@@ -184,6 +217,7 @@ describe("Blocket query building", () => {
     expect(q.milage_to).toBe(17255);
     expect(q.transmission).toBe(2);
     expect(q.fuel).toBe(1352);
+    expect(q.sort).toBe("PRICE_ASC");
   });
 
   it("normalises human fuel/gearbox labels when building Blocket filters", () => {

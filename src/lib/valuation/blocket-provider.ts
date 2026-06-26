@@ -151,7 +151,7 @@ export function buildSearchParams(
     transmission: transmission ?? null,
     fuel: fuel ?? null,
     page: 1,
-    sort: "price",
+    sort: "PRICE_ASC",
   };
 }
 
@@ -519,6 +519,7 @@ export async function valuateWithBlocket(
   opts: ProviderOptions = {},
 ): Promise<ValuationResult> {
   const params = buildSearchParams(vehicle, opts);
+  let activeParams = params;
   const minComparable = opts.minComparable ?? (opts.allowSingleComparable ? 1 : MIN_COMPARABLE);
 
   const empty = (note: string, diagnostics?: ValuationResult["diagnostics"]): ValuationResult => ({
@@ -537,7 +538,7 @@ export async function valuateWithBlocket(
     mostExpensive: null,
     customerOffer: null,
     confidence: 0,
-    query: params,
+    query: activeParams,
     note,
     comps: [],
     diagnostics,
@@ -550,8 +551,9 @@ export async function valuateWithBlocket(
 
   let payload: unknown;
   try {
-    const fetcher = opts.fetcher ? () => opts.fetcher!(params) : () => liveFetcher(params, opts.userAgent ?? DEFAULT_UA);
-    payload = await fetcher();
+    const fetcher = (p: BlocketSearchParams) =>
+      opts.fetcher ? opts.fetcher(p) : liveFetcher(p, opts.userAgent ?? DEFAULT_UA);
+    payload = await fetcher(activeParams);
   } catch (err) {
     if (err instanceof BlocketHttpError) {
       const note = err.status === 403
@@ -562,8 +564,24 @@ export async function valuateWithBlocket(
     return empty(`Blocket-anrop misslyckades: ${err instanceof Error ? err.message : String(err)}`);
   }
 
-  const located = locateListingArray(payload);
-  const all = extractComps(payload);
+  let located = locateListingArray(payload);
+  let all = extractComps(payload);
+  if (all.length === 0 && params.make && !opts.fetcher) {
+    activeParams = { ...params, make: null };
+    try {
+      payload = await liveFetcher(activeParams, opts.userAgent ?? DEFAULT_UA);
+      located = locateListingArray(payload);
+      all = extractComps(payload);
+    } catch (err) {
+      if (err instanceof BlocketHttpError) {
+        const note = err.status === 403
+          ? "Blocket returnerade 403 Forbidden. Troligen blockeras servermiljön/IP-adressen eller så kräver endpointen webbläsarsession/cookies."
+          : `Blocket-anrop misslyckades: ${err.message}`;
+        return empty(note, { httpStatus: err.status, url: err.url, responseSnippet: err.responseSnippet });
+      }
+      return empty(`Blocket-anrop misslyckades: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
   if (all.length === 0) {
     return empty("Inga Blocket-annonser kunde läsas från svaret.", { listingKey: located.key, sellerField: detectSellerField(located.arr) });
   }
@@ -630,7 +648,7 @@ export async function valuateWithBlocket(
     mostExpensive: toRef(used[used.length - 1]),
     customerOffer: offerToResult(offer),
     confidence,
-    query: params,
+    query: activeParams,
     note:
       `${note} Referenspriset är ${
         offer.referenceRank === 1 ? "den lägsta tillgängliga" : "den näst lägsta"
