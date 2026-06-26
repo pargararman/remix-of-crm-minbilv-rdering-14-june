@@ -2,6 +2,7 @@
 import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
 import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
+import { fetchBiluppgifterByRegnr } from "@/lib/biluppgifter.server";
 
 import { FUEL_VALUES, BODY_TYPE_VALUES, GEARBOX_VALUES, DRIVE_VALUES } from "@/lib/vehicle-enums";
 
@@ -56,6 +57,99 @@ export const getVehicle = createServerFn({ method: "POST" })
       .eq("lead_id", data.leadId)
       .maybeSingle();
     return { vehicle };
+  });
+
+function isPlaceholder(value: unknown): boolean {
+  if (value == null) return true;
+  if (typeof value === "number") return !Number.isFinite(value) || value <= 0;
+  if (typeof value === "boolean") return false;
+  if (typeof value !== "string") return false;
+  const v = value.trim().toLowerCase();
+  return !v || v === "-" || v === "—" || v === "okant" || v === "okänd" || v === "okänt" || v === "unknown";
+}
+
+function mergeBiluppgifterPatch(
+  current: Record<string, unknown> | null,
+  incoming: Record<string, unknown>,
+): Record<string, unknown> {
+  const patch: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(incoming)) {
+    if (value === undefined || value === null) continue;
+    if (typeof value === "boolean") {
+      if (value === true && current?.[key] !== true) patch[key] = true;
+      continue;
+    }
+    if (!current || isPlaceholder(current[key])) patch[key] = value;
+  }
+  return patch;
+}
+
+export const syncVehicleFromBiluppgifter = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .inputValidator((input) => z.object({ leadId: z.string().uuid() }).parse(input))
+  .handler(async ({ data, context }) => {
+    const { supabase, userId } = context;
+    const [{ data: lead, error: leadError }, { data: currentVehicle }] = await Promise.all([
+      supabase
+        .from("leads")
+        .select("id, registration_number")
+        .eq("id", data.leadId)
+        .maybeSingle(),
+      supabase
+        .from("vehicles")
+        .select("*")
+        .eq("lead_id", data.leadId)
+        .maybeSingle(),
+    ]);
+    if (leadError) throw new Error(leadError.message);
+    const regnr = (lead as any)?.registration_number;
+    if (!regnr) throw new Error("Lead saknar registreringsnummer.");
+
+    const lookup = await fetchBiluppgifterByRegnr(regnr);
+    if (!lookup.ok) {
+      await supabase.from("activity_timeline").insert({
+        lead_id: data.leadId,
+        type: "biluppgifter_lookup_failed",
+        description: `Biluppgifter kunde inte hämta bilen: ${lookup.error ?? "okänt fel"}`,
+        actor_id: userId,
+        actor_type: "seller",
+        metadata: { error: lookup.error ?? null, warnings: lookup.warnings } as never,
+      } as never);
+      throw new Error(lookup.error ?? "Biluppgifter kunde inte hämta bilen.");
+    }
+
+    const patch = mergeBiluppgifterPatch(
+      (currentVehicle as Record<string, unknown> | null) ?? null,
+      lookup.patch as Record<string, unknown>,
+    );
+    if (Object.keys(patch).length === 0) {
+      return { ok: true, changed: 0, vehicle: currentVehicle, warnings: lookup.warnings };
+    }
+
+    const { data: vehicle, error } = await supabase
+      .from("vehicles")
+      .upsert({ lead_id: data.leadId, ...patch, updated_at: new Date().toISOString() } as never, {
+        onConflict: "lead_id",
+      })
+      .select("*")
+      .single();
+    if (error) throw new Error(error.message);
+
+    await supabase.from("activity_timeline").insert({
+      lead_id: data.leadId,
+      type: "biluppgifter_lookup",
+      description: `Biluppgifter hämtade och fyllde: ${Object.keys(patch).join(", ")}`,
+      actor_id: userId,
+      actor_type: "seller",
+      metadata: {
+        sourceUrl: lookup.sourceUrl,
+        warnings: lookup.warnings,
+        fields: Object.keys(patch),
+        rawVehicle: lookup.rawVehicle,
+      } as never,
+    } as never);
+
+    return { ok: true, changed: Object.keys(patch).length, vehicle, warnings: lookup.warnings };
   });
 
 export const updateVehicle = createServerFn({ method: "POST" })

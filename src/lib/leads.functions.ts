@@ -3,6 +3,7 @@ import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
 import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
 import { STAGE_GROUP_TO_DB, type StageGroup } from "@/lib/stage-groups";
+import { FUEL_VALUES, GEARBOX_VALUES } from "@/lib/vehicle-enums";
 
 
 export type LeadStage =
@@ -245,14 +246,38 @@ const createLeadSchema = z.object({
       model: z.string().trim().max(100).optional().nullable(),
       year: z.number().int().min(1900).max(2100).optional().nullable(),
       mileage_mil: z.number().int().min(0).max(100000).optional().nullable(),
-      fuel: z
-        .enum(["bensin", "diesel", "hybrid", "plugin_hybrid", "electric", "gas", "ethanol", "other"])
-        .optional()
-        .nullable(),
-      gearbox: z.enum(["manual", "automatic"]).optional().nullable(),
+      fuel: z.string().trim().max(50).optional().nullable(),
+      gearbox: z.string().trim().max(50).optional().nullable(),
     })
     .optional(),
 });
+
+function normalizeFuelForDb(value: string | null | undefined): string | null {
+  if (!value) return null;
+  const v = value.trim();
+  const legacy: Record<string, string> = {
+    hybrid: "hybrid_bensin",
+    plugin_hybrid: "plugin_bensin",
+    electric: "el",
+    gas: "fordonsgas",
+    ethanol: "etanol",
+    other: "okant",
+  };
+  const normalized = legacy[v] ?? v;
+  return FUEL_VALUES.includes(normalized as any) ? normalized : null;
+}
+
+function normalizeGearboxForDb(value: string | null | undefined): string | null {
+  if (!value) return null;
+  const v = value.trim();
+  const legacy: Record<string, string> = {
+    automatic: "automatisk",
+    manual: "manuell",
+    unknown: "okant",
+  };
+  const normalized = legacy[v] ?? v;
+  return GEARBOX_VALUES.includes(normalized as any) ? normalized : null;
+}
 
 export const createLead = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
@@ -295,15 +320,17 @@ export const createLead = createServerFn({ method: "POST" })
     const leadId = (lead as any).id as string;
 
     const v = data.vehicle;
-    if (v && (v.brand || v.model || v.year || v.mileage_mil || v.fuel || v.gearbox)) {
+    const fuel = normalizeFuelForDb(v?.fuel);
+    const gearbox = normalizeGearboxForDb(v?.gearbox);
+    if (v && (v.brand || v.model || v.year || v.mileage_mil || fuel || gearbox)) {
       const { error: vErr } = await supabase.from("vehicles").insert({
         lead_id: leadId,
         brand: v.brand ?? null,
         model: v.model ?? null,
         year: v.year ?? null,
         mileage_mil: v.mileage_mil ?? null,
-        fuel: v.fuel ?? null,
-        gearbox: v.gearbox ?? null,
+        fuel,
+        gearbox,
       } as never);
       if (vErr) throw new Error(vErr.message);
     }
@@ -315,6 +342,22 @@ export const createLead = createServerFn({ method: "POST" })
       object_id: leadId,
       new_value: payload as never,
     } as never);
+
+    try {
+      const { runAutomaticLeadValuation } = await import("@/lib/valuation/auto-valuation.server");
+      await runAutomaticLeadValuation(leadId);
+    } catch (autoErr) {
+      const message = autoErr instanceof Error ? autoErr.message : String(autoErr);
+      console.error("manual lead automatic valuation failed", autoErr);
+      await supabase.from("activity_timeline").insert({
+        lead_id: leadId,
+        type: "auto_valuation_failed",
+        description: `Automatisk värdering kunde inte köras: ${message}`,
+        actor_id: userId,
+        actor_type: "seller",
+        metadata: { error: message } as never,
+      } as never);
+    }
 
     return { leadId };
   });

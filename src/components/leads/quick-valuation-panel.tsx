@@ -1,23 +1,23 @@
 //
 // Snabb-värderings-panel: ÄGER save-flödet för fordon + pris via den enda
 // gemensamma save-hooken (useBoringSave). Lokal isSaving, en synlig SaveBar.
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useServerFn } from "@tanstack/react-start";
-import { useQuery, useMutation } from "@tanstack/react-query";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
-import { Send } from "lucide-react";
+import { Loader2, Send } from "lucide-react";
 import { ExternalButtons } from "./external-buttons";
 import { BlocketValuationResult } from "./blocket-valuation-result";
 import { PricingPanel } from "./pricing-panel";
 import { BrandCombobox } from "./brand-combobox";
 import { ModelCombobox } from "./model-combobox";
 import { CommitTextField, CommitNumberField } from "./commit-inputs";
-import { getVehicle } from "@/lib/vehicle.functions";
+import { getVehicle, syncVehicleFromBiluppgifter } from "@/lib/vehicle.functions";
 import { getPricing } from "@/lib/pricing.functions";
 import { valuateBlocket } from "@/lib/valuation.functions";
 import type { ValuationResult } from "@/lib/valuation/types";
@@ -70,6 +70,9 @@ export function QuickValuationPanel({
 }: Props) {
   const fetchVehicle = useServerFn(getVehicle);
   const fetchPricing = useServerFn(getPricing);
+  const syncBiluppgifter = useServerFn(syncVehicleFromBiluppgifter);
+  const queryClient = useQueryClient();
+  const autoSyncAttempted = useRef<string | null>(null);
 
   const vq = useQuery({
     queryKey: ["vehicle", leadId],
@@ -108,6 +111,24 @@ export function QuickValuationPanel({
   const serverVehicle = (vq.data?.vehicle ?? null) as Vehicle | null;
   const serverPricing = (pq.data?.pricing ?? null) as (Record<string, unknown> & { updated_at?: string | null }) | null;
 
+  const syncVehicle = useMutation({
+    mutationKey: ["biluppgifter-sync", leadId],
+    mutationFn: () => syncBiluppgifter({ data: { leadId } }),
+    onSuccess: async (res) => {
+      if ((res?.changed ?? 0) > 0) {
+        setVehiclePatch({});
+        toast.success("Biluppgifter hämtade");
+      }
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["vehicle", leadId] }),
+        queryClient.invalidateQueries({ queryKey: ["lead-detail", leadId] }),
+      ]);
+    },
+    onError: (err: any) => {
+      toast.error(err?.message ?? "Kunde inte hämta biluppgifter.");
+    },
+  });
+
   const value = <K extends keyof Vehicle>(k: K): Vehicle[K] | null | undefined =>
     (k in vehiclePatch ? (vehiclePatch[k as string] as Vehicle[K]) : serverVehicle?.[k]) ?? null;
   const onVehicleChange = (k: string, v: unknown) => setVehiclePatch((p) => ({ ...p, [k]: v }));
@@ -126,6 +147,35 @@ export function QuickValuationPanel({
   const blocketMissingText = blocketMissingFieldsText(liveVehicle);
   const blocketKey = blocketVehicleFingerprint(liveVehicle);
   const blocketKeyString = JSON.stringify(blocketKey);
+  const hasCoreVehicleInfo = !!(
+    serverVehicle?.brand ||
+    serverVehicle?.model ||
+    serverVehicle?.version ||
+    serverVehicle?.year ||
+    serverVehicle?.fuel ||
+    serverVehicle?.gearbox ||
+    serverVehicle?.body_type ||
+    serverVehicle?.drive_type ||
+    serverVehicle?.horsepower
+  );
+
+  useEffect(() => {
+    if (!regnr || vq.isLoading || vq.isFetching || isDirty || hasCoreVehicleInfo || syncVehicle.isPending) {
+      return;
+    }
+    const attemptKey = `${leadId}:${regnr}`;
+    if (autoSyncAttempted.current === attemptKey) return;
+    autoSyncAttempted.current = attemptKey;
+    syncVehicle.mutate();
+  }, [
+    leadId,
+    regnr,
+    vq.isLoading,
+    vq.isFetching,
+    isDirty,
+    hasCoreVehicleInfo,
+    syncVehicle.isPending,
+  ]);
 
   // Blocket-API-värdering (server-side). Skippas helt tills obligatoriska fält är kompletta.
   const blocket = useMutation({
@@ -198,6 +248,12 @@ export function QuickValuationPanel({
             onBlocketValuate={handleBlocketValuate}
             blocketPending={blocket.isPending || isSaving}
           />
+          {syncVehicle.isPending && (
+            <span className="inline-flex items-center gap-1 rounded-md border border-border px-2 py-1 text-xs text-muted-foreground">
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              Hämtar biluppgifter
+            </span>
+          )}
           <div className="ml-auto">
             <TooltipProvider delayDuration={200}>
               <Tooltip>

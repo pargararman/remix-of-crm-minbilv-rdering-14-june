@@ -19,6 +19,7 @@ import {
 } from "@/components/ui/select";
 import { ArrowLeft, Loader2 } from "lucide-react";
 import { BrandCombobox } from "@/components/leads/brand-combobox";
+import { FUEL_OPTIONS, GEARBOX_OPTIONS } from "@/lib/vehicle-enums";
 
 export const Route = createFileRoute("/_authenticated/leads/ny")({
   head: () => ({ meta: [{ title: "Nytt lead — Min Bil Värdering" }] }),
@@ -27,15 +28,8 @@ export const Route = createFileRoute("/_authenticated/leads/ny")({
   errorComponent: RouteError,
 });
 
-type FuelOption =
-  | "bensin"
-  | "diesel"
-  | "hybrid"
-  | "plugin_hybrid"
-  | "electric"
-  | "gas"
-  | "ethanol"
-  | "other";
+type FuelOption = (typeof FUEL_OPTIONS)[number]["value"];
+type GearboxOption = (typeof GEARBOX_OPTIONS)[number]["value"];
 
 const DRAFT_KEY = "lead-draft:v1";
 
@@ -52,7 +46,7 @@ const EMPTY_FORM = {
   year: "",
   mileage_mil: "",
   fuel: "" as FuelOption | "",
-  gearbox: "" as "manual" | "automatic" | "",
+  gearbox: "" as GearboxOption | "",
 };
 
 function NewLeadPage() {
@@ -129,7 +123,7 @@ function NewLeadPage() {
             year: form.year ? Number(form.year) : null,
             mileage_mil: form.mileage_mil ? Number(form.mileage_mil) : null,
             fuel: (form.fuel || null) as FuelOption | null,
-            gearbox: (form.gearbox || null) as "manual" | "automatic" | null,
+            gearbox: (form.gearbox || null) as GearboxOption | null,
           },
         },
       });
@@ -274,14 +268,9 @@ function NewLeadPage() {
                   <SelectValue placeholder="Välj bränsle" />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="bensin">Bensin</SelectItem>
-                  <SelectItem value="diesel">Diesel</SelectItem>
-                  <SelectItem value="hybrid">Hybrid</SelectItem>
-                  <SelectItem value="plugin_hybrid">Laddhybrid</SelectItem>
-                  <SelectItem value="electric">El</SelectItem>
-                  <SelectItem value="gas">Gas</SelectItem>
-                  <SelectItem value="ethanol">Etanol</SelectItem>
-                  <SelectItem value="other">Annat</SelectItem>
+                  {FUEL_OPTIONS.map((o) => (
+                    <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>
+                  ))}
                 </SelectContent>
               </Select>
             </div>
@@ -289,14 +278,15 @@ function NewLeadPage() {
               <Label>Växellåda</Label>
               <Select
                 value={form.gearbox}
-                onValueChange={(v) => set("gearbox", v as "manual" | "automatic")}
+                onValueChange={(v) => set("gearbox", v as GearboxOption)}
               >
                 <SelectTrigger>
                   <SelectValue placeholder="Välj" />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="manual">Manuell</SelectItem>
-                  <SelectItem value="automatic">Automat</SelectItem>
+                  {GEARBOX_OPTIONS.map((o) => (
+                    <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>
+                  ))}
                 </SelectContent>
               </Select>
             </div>
