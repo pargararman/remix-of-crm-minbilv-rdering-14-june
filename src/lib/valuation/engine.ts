@@ -19,7 +19,7 @@ export interface DeductionBand {
 export interface CustomerOfferBreakdown {
   referencePrice: number;
   referenceListing: BlocketComp;
-  referenceRank: 2;
+  referenceRank: 1 | 2;
   deduction: number;
   deductionBand: string;
   customerOffer: number;
@@ -50,7 +50,15 @@ export function sek(n: number): string {
  * Dealer margin table from the business rule.
  * We floor percentage bands at 40k to avoid the 400k boundary becoming non-monotonic.
  */
-export function deductionForReference(referencePrice: number): DeductionBand {
+export function deductionForReference(referencePrice: number, marginAmount?: number | null): DeductionBand {
+  if (typeof marginAmount === "number" && Number.isFinite(marginAmount) && marginAmount >= 0) {
+    const deduction = round100(marginAmount);
+    return {
+      label: `admininställd marginal: fast avdrag ${sek(deduction)}`,
+      deduction,
+      method: "flat",
+    };
+  }
   if (referencePrice < 200_000) {
     return { label: "under 200 000 kr: fast avdrag 30 000 kr", deduction: 30_000, method: "flat" };
   }
@@ -67,24 +75,34 @@ export function deductionForReference(referencePrice: number): DeductionBand {
 
 export function buildCustomerValuationText(args: {
   referencePrice: number;
+  referenceRank?: 1 | 2;
   deduction: number;
   customerOffer: number;
 }): string {
+  const referenceText =
+    args.referenceRank === 1
+      ? "det lägsta jämförbara priset"
+      : "det näst lägsta jämförbara priset";
   return (
-    `Baserat på jämförbara bilar som just nu ligger ute använder vi det näst lägsta ` +
-    `jämförbara priset (${sek(args.referencePrice)}) som referenspunkt och drar av ` +
+    `Baserat på jämförbara bilar som just nu ligger ute använder vi ${referenceText} ` +
+    `(${sek(args.referencePrice)}) som referenspunkt och drar av ` +
     `${sek(args.deduction)} för marginal, klargöring, risk och återförsäljningskostnader. ` +
     `Det ger ett uppskattat kunderbjudande på ${sek(args.customerOffer)}.`
   );
 }
 
-export function calculateCustomerOffer(compsSortedAsc: BlocketComp[]): CustomerOfferBreakdown | null {
-  if (compsSortedAsc.length < 2) return null;
+export function calculateCustomerOffer(
+  compsSortedAsc: BlocketComp[],
+  opts: { marginAmount?: number | null; allowSingleListing?: boolean } = {},
+): CustomerOfferBreakdown | null {
+  if (compsSortedAsc.length < 2 && !opts.allowSingleListing) return null;
+  if (compsSortedAsc.length < 1) return null;
 
   const sorted = [...compsSortedAsc].sort((a, b) => a.price - b.price);
-  const referenceListing = sorted[1];
+  const referenceRank: 1 | 2 = sorted.length >= 2 ? 2 : 1;
+  const referenceListing = sorted[referenceRank - 1];
   const referencePrice = round100(referenceListing.price);
-  const band = deductionForReference(referencePrice);
+  const band = deductionForReference(referencePrice, opts.marginAmount);
   const customerOffer = round100(clampMin0(referencePrice - band.deduction));
 
   // Pricing panel still has from/to fields. Keep them tight around the exact offer,
@@ -95,13 +113,13 @@ export function calculateCustomerOffer(compsSortedAsc: BlocketComp[]): CustomerO
   return {
     referencePrice,
     referenceListing,
-    referenceRank: 2,
+    referenceRank,
     deduction: band.deduction,
     deductionBand: band.label,
     customerOffer,
     customerLow,
     customerHigh,
     dealerOutPrice: referencePrice,
-    explanationText: buildCustomerValuationText({ referencePrice, deduction: band.deduction, customerOffer }),
+    explanationText: buildCustomerValuationText({ referencePrice, referenceRank, deduction: band.deduction, customerOffer }),
   };
 }

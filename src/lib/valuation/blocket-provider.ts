@@ -6,7 +6,7 @@
 // - hard-filter comparable cars locally by model/year/mileage
 // - if seller type exists, value from dealer listings only
 // - if seller type does not exist, use all comparable listings and say so
-// - customer offer is second-cheapest comparable listing minus agreed deduction
+// - customer offer is second-cheapest comparable listing minus configured margin
 
 import { blocketMakeId } from "./blocket-brands";
 import { calculateCustomerOffer } from "./engine";
@@ -80,7 +80,7 @@ const FUEL_CODE: Record<string, number> = {
 
 const DEFAULT_YEAR_BAND = 1;
 const DEFAULT_MILEAGE_BAND_MIL = 3000;
-const MIN_COMPARABLE = 3;
+const MIN_COMPARABLE = 2;
 
 let shapeLogged = false;
 
@@ -519,7 +519,7 @@ export async function valuateWithBlocket(
   opts: ProviderOptions = {},
 ): Promise<ValuationResult> {
   const params = buildSearchParams(vehicle, opts);
-  const minComparable = opts.minComparable ?? MIN_COMPARABLE;
+  const minComparable = opts.minComparable ?? (opts.allowSingleComparable ? 1 : MIN_COMPARABLE);
 
   const empty = (note: string, diagnostics?: ValuationResult["diagnostics"]): ValuationResult => ({
     ok: false,
@@ -601,7 +601,10 @@ export async function valuateWithBlocket(
   }
 
   const prices = used.map((c) => c.price).sort((a, b) => a - b);
-  const offer = calculateCustomerOffer(used);
+  const offer = calculateCustomerOffer(used, {
+    marginAmount: opts.marginAmount,
+    allowSingleListing: opts.allowSingleComparable,
+  });
   if (!offer) return empty("Kunde inte räkna ut kundvärdering från jämförbara annonser.");
 
   const marketMedian = round100(median(prices));
@@ -628,7 +631,11 @@ export async function valuateWithBlocket(
     customerOffer: offerToResult(offer),
     confidence,
     query: params,
-    note: `${note} Referenspriset är den näst lägsta jämförbara annonsen; median används endast som marknadskontext.`,
+    note:
+      `${note} Referenspriset är ${
+        offer.referenceRank === 1 ? "den lägsta tillgängliga" : "den näst lägsta"
+      } jämförbara annonsen; median används endast som marknadskontext.` +
+      (offer.referenceRank === 1 ? " Endast en annons användes, så leadet bör granskas manuellt." : ""),
     comps: used,
     diagnostics: { listingKey: located.key, sellerField },
   };

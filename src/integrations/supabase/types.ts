@@ -378,6 +378,7 @@ export type Database = {
           sms_quiet_hours_start: string
           timezone: string
           updated_at: string
+          valuation_margin_amount: number
           vat_rate: number
         }
         Insert: {
@@ -412,6 +413,7 @@ export type Database = {
           sms_quiet_hours_start?: string
           timezone?: string
           updated_at?: string
+          valuation_margin_amount?: number
           vat_rate?: number
         }
         Update: {
@@ -446,6 +448,7 @@ export type Database = {
           sms_quiet_hours_start?: string
           timezone?: string
           updated_at?: string
+          valuation_margin_amount?: number
           vat_rate?: number
         }
         Relationships: []

@@ -87,6 +87,37 @@ export const updateExternalLinks = createServerFn({ method: "POST" })
     return { ok: true };
   });
 
+export const updateValuationSettings = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .inputValidator((input) =>
+    z
+      .object({
+        id: z.string().uuid(),
+        valuation_margin_amount: z.number().int().min(0).max(10_000_000),
+      })
+      .parse(input),
+  )
+  .handler(async ({ data, context }) => {
+    await requireAdmin(context.supabase, context.userId);
+    const { id, ...patch } = data;
+    const { data: old } = await supabaseAdmin
+      .from("company_settings")
+      .select("valuation_margin_amount")
+      .eq("id", id)
+      .maybeSingle();
+    const { error } = await supabaseAdmin.from("company_settings").update(patch as any).eq("id", id);
+    if (error) throw error;
+    await supabaseAdmin.from("audit_logs").insert({
+      user_id: context.userId,
+      action: "settings_valuation_updated",
+      object_type: "company_settings",
+      object_id: id,
+      old_value: old as any,
+      new_value: patch as any,
+    });
+    return { ok: true };
+  });
+
 export const logAuditAction = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
   .inputValidator((input) =>

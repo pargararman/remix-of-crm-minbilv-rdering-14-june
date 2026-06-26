@@ -96,8 +96,10 @@ export function QuickValuationPanel({
       ...p,
       valuation_from: o.customerLow,
       valuation_to: o.customerHigh,
-      out_price_from: r.marketLow,
-      out_price_to: r.marketHigh,
+      in_price_from: o.customerLow,
+      in_price_to: o.customerHigh,
+      out_price_from: o.referencePrice,
+      out_price_to: o.referencePrice,
       pricing_notes: o.explanationText,
     }));
     toast.success("Blocket-värdering införd – kom ihåg att spara.");

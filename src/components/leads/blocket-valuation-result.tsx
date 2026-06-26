@@ -47,6 +47,12 @@ export function BlocketValuationResult({ result, isPending, isError, regnr, onAp
   }
 
   if (!result) return null;
+  const referenceLabel =
+    result.customerOffer?.referenceRank === 1 ? "Referenspris (billigast)" : "Referenspris (näst billigast)";
+  const offerLabel =
+    result.customerOffer?.referenceRank === 1
+      ? "Kundvärdering (billigast − avdrag)"
+      : "Kundvärdering (näst billigast − avdrag)";
 
   return (
     <div className="rounded-md border border-border bg-muted/30 p-3 space-y-3">
@@ -72,11 +78,11 @@ export function BlocketValuationResult({ result, isPending, isError, regnr, onAp
         <div className="space-y-2">
           <div className="grid grid-cols-2 gap-2">
             <Metric
-              label="Kundvärdering (näst billigast − avdrag)"
+              label={offerLabel}
               value={sek(result.customerOffer.customerOffer)}
               strong
             />
-            <Metric label="Referenspris (näst billigast)" value={sek(result.customerOffer.referencePrice)} />
+            <Metric label={referenceLabel} value={sek(result.customerOffer.referencePrice)} />
           </div>
           <div className="grid grid-cols-2 gap-2">
             <Metric label="Avdrag" value={sek(result.customerOffer.deduction)} />

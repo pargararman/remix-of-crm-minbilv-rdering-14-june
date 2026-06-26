@@ -18,6 +18,7 @@ import {
   getMissingBlocketVehicleFields,
   isVehicleCompleteForBlocket,
 } from "../src/lib/valuation/vehicle-validation";
+import { mapBiluppgifterVehicle } from "../src/lib/biluppgifter.server";
 import { TNH357_VEHICLE } from "./fixtures/vehicle-tnh357";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -130,6 +131,48 @@ describe("Blocket vehicle completeness validation", () => {
   });
 });
 
+describe("Biluppgifter CRM mapping", () => {
+  it("maps Swedish vehicle response fields into CRM valuation fields", () => {
+    const r = mapBiluppgifterVehicle({
+      vehicle: {
+        regnr: "TNH357",
+        vin: "YV1LFBMUDK1432465",
+        make: "Volvo",
+        market_name: "XC90",
+        variant: "T8 Polestar AWD",
+        model_year: 2019,
+        meter: 142550,
+        transmission: "Automat",
+        exterior_color: "Grå",
+        no_users: 4,
+        technical: {
+          four_wheel_drive: true,
+          electric_vehicle_configuration: "Laddhybrid",
+          chassi: ["Kombi"],
+          drive: [
+            { fuel: "Bensin", power_hp: 303 },
+            { fuel: "El", power_hp: 87 },
+          ],
+        },
+      },
+    });
+
+    expect(r.ok).toBe(true);
+    expect(r.patch).toMatchObject({
+      brand: "Volvo",
+      model: "XC90",
+      version: "T8 Polestar AWD",
+      year: 2019,
+      mileage_mil: 14255,
+      fuel: "plugin_bensin",
+      gearbox: "automatisk",
+      drive_type: "fyrhjulsdrift",
+      body_type: "suv",
+      horsepower: 303,
+    });
+  });
+});
+
 describe("Blocket query building", () => {
   it("uses complete CRM vehicle fields as Blocket filters", () => {
     const q = buildSearchParams(TNH357_VEHICLE);
@@ -217,6 +260,31 @@ describe("second-cheapest offer engine", () => {
     expect(deductionForReference(500000).deduction).toBe(45000);
     expect(deductionForReference(800000).deduction).toBe(88000);
   });
+
+  it("uses configured fixed margin when provided", () => {
+    const offer = calculateCustomerOffer(
+      [
+        { price: 320000, title: "A" },
+        { price: 333000, title: "B" },
+      ],
+      { marginAmount: 55000 },
+    );
+    expect(offer?.referencePrice).toBe(333000);
+    expect(offer?.deduction).toBe(55000);
+    expect(offer?.customerOffer).toBe(278000);
+    expect(offer?.deductionBand).toContain("admininställd marginal");
+  });
+
+  it("can fall back to the cheapest listing when explicitly allowed", () => {
+    const offer = calculateCustomerOffer([{ price: 320000, title: "A" }], {
+      marginAmount: 40000,
+      allowSingleListing: true,
+    });
+    expect(offer?.referenceRank).toBe(1);
+    expect(offer?.referencePrice).toBe(320000);
+    expect(offer?.customerOffer).toBe(280000);
+    expect(offer?.explanationText).toContain("det lägsta jämförbara priset");
+  });
 });
 
 describe("valuateWithBlocket", () => {
@@ -248,6 +316,34 @@ describe("valuateWithBlocket", () => {
     expect(r.dealerCount).toBe(3);
     expect(r.privateCount).toBe(1);
     expect(r.comps.every((c) => c.isDealer === true)).toBe(true);
+  });
+
+  it("allows one dealer listing only when fallback mode is enabled", async () => {
+    const oneDealer = {
+      data: [
+        {
+          ad_id: "1",
+          subject: "Volvo XC90 T8 AWD",
+          price: { amount: 399000 },
+          modelYear: 2019,
+          mileage: 14000,
+          dealer_segment: "Företag",
+        },
+      ],
+    };
+    const blocked = await valuateWithBlocket(TNH357_VEHICLE, { fetcher: () => Promise.resolve(oneDealer) });
+    expect(blocked.ok).toBe(false);
+
+    const allowed = await valuateWithBlocket(TNH357_VEHICLE, {
+      fetcher: () => Promise.resolve(oneDealer),
+      allowSingleComparable: true,
+      marginAmount: 50000,
+    });
+    expect(allowed.ok).toBe(true);
+    expect(allowed.customerOffer?.referenceRank).toBe(1);
+    expect(allowed.customerOffer?.referencePrice).toBe(399000);
+    expect(allowed.customerOffer?.customerOffer).toBe(349000);
+    expect(allowed.note).toMatch(/Endast en annons/);
   });
 
   it("refuses bare brand/model leads", async () => {

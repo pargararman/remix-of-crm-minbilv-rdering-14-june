@@ -13,6 +13,7 @@ import { sendIntakeEmail } from "@/lib/email/intake-email.server";
 import { sendInternalLeadBackupEmail } from "@/lib/email/internal-backup.server";
 import { scheduleFollowups } from "@/lib/automation/schedule-followups.server";
 import { geocodeLeadInBackground } from "@/lib/geocoding.server";
+import { runAutomaticLeadValuation } from "@/lib/valuation/auto-valuation.server";
 
 type AutoTask = { label: string; kind: "sms" | "email" | "other"; templateCode?: string };
 
@@ -530,6 +531,11 @@ export const Route = createFileRoute("/api/public/leads/intake")({
           promises.push(sendSms({ leadId, templateCode: "intake_auto", isSystem: true }));
           tasks.push({ label: "notifySellersNewLead", kind: "other" });
           promises.push(notifySellersNewLead({ leadId, regnummer: regnr, customerName: parsed.namn ?? null }));
+        }
+
+        if (createdNew || parsed.step === "valuation" || parsed.step === "extras") {
+          tasks.push({ label: "runAutomaticLeadValuation", kind: "other" });
+          promises.push(runAutomaticLeadValuation(leadId));
         }
 
         const hasRealEmail = !!parsed.email && !isPlaceholderEmail(parsed.email);

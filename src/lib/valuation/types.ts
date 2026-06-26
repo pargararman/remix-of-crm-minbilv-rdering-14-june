@@ -40,7 +40,7 @@ export interface CompRef {
 
 export interface CustomerOfferResult {
   referencePrice: number;
-  referenceRank: 2;
+  referenceRank: 1 | 2;
   referenceListing: CompRef;
   deduction: number;
   deductionBand: string;
@@ -117,7 +117,11 @@ export interface ProviderOptions {
   yearBand?: number;
   /** Mileage band half-width in mil (default 3000 mil = 30 000 km). */
   mileageBandMil?: number;
-  /** Minimum used comparable listings required for a numeric valuation (default 3). */
+  /** Minimum used comparable listings required for a numeric valuation (default 2). */
   minComparable?: number;
+  /** Allow valuating from one listing. Caller should flag this for manual review. */
+  allowSingleComparable?: boolean;
+  /** Fixed dealer margin/admin deduction in SEK. Falls back to the legacy band table when omitted. */
+  marginAmount?: number | null;
   userAgent?: string;
 }

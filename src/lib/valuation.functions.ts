@@ -47,7 +47,18 @@ export const valuateBlocket = createServerFn({ method: "POST" })
       return emptyResult(blocketMissingFieldsText(vehicle as ValuationVehicle));
     }
 
-    const result = await valuateWithBlocket(vehicle as ValuationVehicle);
+    const { data: settings } = await context.supabase
+      .from("company_settings")
+      .select("valuation_margin_amount")
+      .limit(1)
+      .maybeSingle();
+
+    const marginAmount =
+      typeof (settings as any)?.valuation_margin_amount === "number"
+        ? (settings as any).valuation_margin_amount
+        : null;
+
+    const result = await valuateWithBlocket(vehicle as ValuationVehicle, { marginAmount });
 
     // Best-effort timeline row — never block/throw on the audit write.
     queueMicrotask(() => {
