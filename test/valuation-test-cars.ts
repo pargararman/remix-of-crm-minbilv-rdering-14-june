@@ -54,6 +54,7 @@ type TestRow = {
   dealerAttractivenessScore: number;
   confidenceScore: number;
   confidenceLevel: string;
+  valuationStatus: string;
   smsDecision: "would_send" | "blocked";
   smsBlockedReason: string;
   valuationOk: boolean;
@@ -368,6 +369,7 @@ async function runOne(car: TestCar, client: SupabaseClient | null, marginAmount:
     dealerAttractivenessScore: valuation?.dealerAttractivenessScore ?? 0,
     confidenceScore: valuation?.confidence ?? 0,
     confidenceLevel: valuation?.confidenceLevel ?? "low",
+    valuationStatus: valuation?.valuationStatus ?? "needs_review_no_price",
     smsDecision,
     smsBlockedReason: smsDecision === "blocked" ? smsBlockedReason(valuation, biluppgifter) : "",
     valuationOk: valuation?.ok ?? false,
@@ -395,6 +397,7 @@ function markdownTable(rows: TestRow[]): string {
     "Fallback",
     "Dealer score",
     "Confidence",
+    "Status",
     "SMS",
     "Blocked reason",
     "CRM saved",
@@ -412,6 +415,7 @@ function markdownTable(rows: TestRow[]): string {
     r.fallbackStage ?? "-",
     r.dealerAttractivenessScore,
     `${r.confidenceLevel} (${Math.round(r.confidenceScore * 100)}%)`,
+    r.valuationStatus,
     r.smsDecision === "would_send" ? "Would send" : "Blocked",
     r.smsBlockedReason || "-",
     r.save.saved

@@ -293,8 +293,12 @@ async function saveAutomaticPricing(leadId: string, result: ValuationResult, veh
         totalDeduction: offer.totalDeduction,
         confidenceScore: result.confidence,
         confidenceLevel: result.confidenceLevel,
+        valuationStatus: result.valuationStatus,
+        manualReviewReason: result.manualReviewReason,
         dealerAttractivenessScore: result.dealerAttractivenessScore,
         fallbackStage: result.fallbackStage,
+        strictComparableCount: result.strictComparableCount,
+        softFallbackComparableCount: result.softFallbackComparableCount,
         sanityChecks: result.sanityChecks,
         smsEligible: result.smsEligible,
       },
@@ -310,6 +314,9 @@ async function saveAutomaticPricing(leadId: string, result: ValuationResult, veh
         privateCount: result.privateCount,
         comparableCount: result.comparableCount,
         removedCount: result.removedCount,
+        strictComparableCount: result.strictComparableCount,
+        softFallbackComparableCount: result.softFallbackComparableCount,
+        comparableScores: result.comparableScores,
         referenceListing: offer.referenceListing,
         listings: result.comps.map(listingAudit),
         diagnostics: result.diagnostics,
@@ -412,10 +419,11 @@ export async function runAutomaticLeadValuation(leadId: string): Promise<AutoVal
   }
 
   if (!valuation.smsEligible) {
+    await saveAutomaticPricing(leadId, valuation, vehicleForValuation);
     const note =
       valuation.sanityChecks.blockers.length > 0
         ? `Automatisk SMS-värdering stoppad: ${valuation.sanityChecks.blockers.join(" ")}`
-        : "Automatisk SMS-värdering stoppad av confidence/sanity checks.";
+        : valuation.manualReviewReason ?? "Automatisk SMS-värdering stoppad av confidence/sanity checks.";
     await flagManualReview(leadId, note, { provider: "blocket", result: valuation });
     return { status: "manual_review", leadId, note, valuation };
   }

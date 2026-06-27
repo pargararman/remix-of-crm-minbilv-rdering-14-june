@@ -416,7 +416,7 @@ describe("valuateWithBlocket", () => {
     expect(r.smsEligible).toBe(true);
   });
 
-  it("blocks low-confidence valuations when fewer than 3 comparables remain", async () => {
+  it("creates internal review-only pricing when fewer than 3 comparables remain", async () => {
     const oneDealer = {
       data: [
         {
@@ -430,10 +430,13 @@ describe("valuateWithBlocket", () => {
       ],
     };
     const r = await valuateWithBlocket(TNH357_VEHICLE, { fetcher: () => Promise.resolve(oneDealer) });
-    expect(r.ok).toBe(false);
+    expect(r.ok).toBe(true);
+    expect(r.valuationStatus).toBe("needs_review_with_price");
     expect(r.confidenceLevel).toBe("low");
     expect(r.smsEligible).toBe(false);
-    expect(r.note).toMatch(/För få giltiga jämförbara/);
+    expect(r.customerOffer?.referencePrice).toBe(379000);
+    expect(r.customerOffer?.customerOffer).toBe(331000);
+    expect(r.sanityChecks.blockers).toEqual(expect.arrayContaining(["Färre än 3 giltiga jämförbara annonser användes."]));
   });
 
   it("removes damaged/non-comparable ads before pricing", async () => {
@@ -464,7 +467,7 @@ describe("valuateWithBlocket", () => {
     expect(r.customerOffer?.referencePrice).toBe(205000);
   });
 
-  it("allows one dealer listing only when fallback mode is enabled", async () => {
+  it("keeps one-listing pricing review-only even when fallback mode is enabled", async () => {
     const oneDealer = {
       data: [
         {
@@ -478,7 +481,9 @@ describe("valuateWithBlocket", () => {
       ],
     };
     const blocked = await valuateWithBlocket(TNH357_VEHICLE, { fetcher: () => Promise.resolve(oneDealer) });
-    expect(blocked.ok).toBe(false);
+    expect(blocked.ok).toBe(true);
+    expect(blocked.valuationStatus).toBe("needs_review_with_price");
+    expect(blocked.smsEligible).toBe(false);
 
     const allowed = await valuateWithBlocket(TNH357_VEHICLE, {
       fetcher: () => Promise.resolve(oneDealer),
@@ -487,10 +492,11 @@ describe("valuateWithBlocket", () => {
     });
     expect(allowed.ok).toBe(true);
     expect(allowed.customerOffer?.referenceRank).toBe(1);
-    expect(allowed.customerOffer?.referencePrice).toBe(399000);
-    expect(allowed.customerOffer?.customerOffer).toBe(341000);
+    expect(allowed.customerOffer?.referencePrice).toBe(379000);
+    expect(allowed.customerOffer?.customerOffer).toBe(321000);
     expect(allowed.confidenceLevel).toBe("low");
     expect(allowed.smsEligible).toBe(false);
+    expect(allowed.valuationStatus).toBe("needs_review_with_price");
     expect(allowed.note).toMatch(/Auto-SMS blockerat/);
   });
 
@@ -505,6 +511,7 @@ describe("valuateWithBlocket", () => {
       fetcher: () => Promise.resolve({ data: [{ ad_id: "1", subject: "Volvo XC60 Recharge", price: { amount: 450000 }, modelYear: 2019, mileage: 14000 }] }),
     });
     expect(r.ok).toBe(false);
-    expect(r.note).toMatch(/För få giltiga jämförbara/);
+    expect(r.valuationStatus).toBe("needs_review_no_price");
+    expect(r.note).toMatch(/För få användbara jämförbara/);
   });
 });

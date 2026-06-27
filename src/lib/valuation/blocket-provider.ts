@@ -14,6 +14,7 @@ import { blocketMissingFieldsText, isVehicleCompleteForBlocket } from "./vehicle
 import type {
   BlocketComp,
   BlocketSearchParams,
+  ComparableScore,
   CompRef,
   CustomerOfferResult,
   ProviderOptions,
@@ -81,6 +82,8 @@ const FUEL_CODE: Record<string, number> = {
 const MIN_COMPARABLE = 3;
 const TARGET_COMPARABLE = 5;
 const MIN_AUTO_MARGIN = 15_000;
+const MIN_REALISTIC_CAR_PRICE = 30_000;
+const INTERNAL_UNCERTAINTY_DISCOUNT_RATE = 0.05;
 
 interface SearchStage {
   stage: number;
@@ -436,6 +439,10 @@ function mapListing(item: unknown): BlocketComp | null {
 export function extractComps(payload: unknown): BlocketComp[] {
   const located = locateListingArray(payload);
   const comps = located.arr.map(mapListing).filter((c): c is BlocketComp => !!c);
+  return dedupeComps(comps);
+}
+
+function dedupeComps(comps: BlocketComp[]): BlocketComp[] {
   const byKey = new Map<string, BlocketComp>();
   for (const c of comps) {
     const key = c.id ?? `${c.price}|${c.title ?? ""}|${c.year ?? ""}|${c.mileage_mil ?? ""}`;
@@ -444,16 +451,47 @@ export function extractComps(payload: unknown): BlocketComp[] {
   return [...byKey.values()];
 }
 
+function titleMatchesMake(title: string | null | undefined, brand: string | null | undefined): boolean {
+  if (!brand?.trim()) return true;
+  if (!title?.trim()) return false;
+  const t = norm(title);
+  const b = norm(brand);
+  if (!b) return true;
+  if (t.includes(b)) return true;
+  if (b === "volkswagen" && /\b(vw|volkswagen)\b/i.test(title)) return true;
+  if (b === "skoda" && (t.includes("skoda") || t.includes("skoda"))) return true;
+  return false;
+}
+
+function modelAliases(model: string | null | undefined): string[] {
+  if (!model?.trim()) return [];
+  const raw = model.trim();
+  const m = norm(raw);
+  const aliases = new Set<string>([m, norm(raw.replace(/([a-zA-Z]+)(\d+)/, "$1 $2"))]);
+
+  if (m.includes("passat")) aliases.add("passat");
+  if (m === "rav" || m.includes("rav4") || m.includes("rav")) {
+    aliases.add("rav");
+    aliases.add("rav4");
+  }
+  const compactModels = ["v40", "v60", "v70", "v90", "xc40", "xc60", "xc70", "xc90", "golf", "octavia"];
+  for (const compact of compactModels) {
+    if (m.includes(compact)) {
+      aliases.add(compact);
+      aliases.add(norm(compact.replace(/([a-z]+)(\d+)/i, "$1 $2")));
+    }
+  }
+
+  return [...aliases].filter(Boolean);
+}
+
 export function titleMatchesModel(title: string | null | undefined, model: string | null | undefined): boolean {
   if (!model?.trim()) return true;
   if (!title?.trim()) return false;
   const t = norm(title);
-  const m = norm(model);
-  if (!m) return true;
-  if (t.includes(m)) return true;
-  // Handle model written with inserted spaces in the ad title (XC 90 vs XC90).
-  const spacedModel = model.replace(/([a-zA-Z]+)(\d+)/, "$1 $2");
-  return t.includes(norm(spacedModel));
+  const aliases = modelAliases(model);
+  if (aliases.length === 0) return true;
+  return aliases.some((alias) => t.includes(alias));
 }
 
 function versionPowertrainTokens(version: string | null | undefined): string[] {
@@ -576,6 +614,7 @@ const NON_COMPARABLE_WORDS = [
 ];
 
 function nonComparableReason(comp: BlocketComp): string | null {
+  if (comp.price < MIN_REALISTIC_CAR_PRICE) return `Pris ${comp.price} kr verkar vara månadspris/leasing, inte kontantpris.`;
   const hay = norm(`${comp.title ?? ""} ${comp.url ?? ""}`);
   for (const word of NON_COMPARABLE_WORDS) {
     if (hay.includes(norm(word))) return `Annonsen verkar inte vara jämförbar (${word}).`;
@@ -661,6 +700,320 @@ export function filterToComparable(
   });
 }
 
+type ScoredSoftCandidate = ComparableScore & {
+  comp: BlocketComp;
+  stage: SearchStage;
+  query: BlocketSearchParams;
+};
+
+function titleHasFuelSignal(vehicleFuel: string | null | undefined, comp: BlocketComp): boolean {
+  if (!vehicleFuel) return true;
+  const wanted = norm(vehicleFuel);
+  const hay = norm(`${comp.fuel ?? ""} ${comp.title ?? ""}`);
+  if (!hay) return true;
+  if (wanted === "pluginbensin" || wanted === "pluginhybrid" || wanted === "pluginhybridbensin") {
+    return hay.includes("plugin") || hay.includes("laddhybrid") || hay.includes("phev") ||
+      hay.includes("recharge") || hay.includes("gte") || hay.includes("t6") || hay.includes("t8");
+  }
+  if (wanted === "hybriddiesel" || wanted === "diesel") {
+    return hay.includes("diesel") || hay.includes("d3") || hay.includes("d4") || hay.includes("d5") || hay.includes("b4");
+  }
+  if (wanted === "hybridbensin" || wanted === "bensin") {
+    return hay.includes("bensin") || hay.includes("hybrid") || hay.includes("t3") ||
+      hay.includes("t4") || hay.includes("t5") || hay.includes("t6");
+  }
+  return matchesFuel(vehicleFuel, comp);
+}
+
+function titleHasGearboxSignal(vehicleGearbox: string | null | undefined, comp: BlocketComp): boolean {
+  if (!vehicleGearbox) return true;
+  const wanted = norm(vehicleGearbox);
+  const hay = norm(`${comp.gearbox ?? ""} ${comp.title ?? ""}`);
+  if (!hay) return true;
+  const mentions = hay.includes("automat") || hay.includes("automatic") || hay.includes("aut") ||
+    hay.includes("manuell") || hay.includes("manual");
+  if (!mentions) return true;
+  if (wanted.includes("automat")) return hay.includes("automat") || hay.includes("automatic") || hay.includes("aut");
+  if (wanted.includes("manuell") || wanted.includes("manual")) return hay.includes("manuell") || hay.includes("manual");
+  return true;
+}
+
+function scoreSoftComparable(
+  comp: BlocketComp,
+  vehicle: ValuationVehicle,
+  stage: SearchStage,
+  query: BlocketSearchParams,
+): ScoredSoftCandidate {
+  const reasons: string[] = [`stage ${stage.stage}`];
+  let score = 0;
+
+  if (!titleMatchesMake(comp.title, vehicle.brand)) {
+    return {
+      id: comp.id ?? null,
+      title: comp.title ?? null,
+      price: comp.price,
+      score: 0,
+      quality: "rejected",
+      reasons: ["wrong make"],
+      used: false,
+      comp,
+      stage,
+      query,
+    };
+  }
+  if (!titleMatchesModel(comp.title, vehicle.model)) {
+    return {
+      id: comp.id ?? null,
+      title: comp.title ?? null,
+      price: comp.price,
+      score: 0,
+      quality: "rejected",
+      reasons: ["wrong model/model family"],
+      used: false,
+      comp,
+      stage,
+      query,
+    };
+  }
+
+  if (titleHasFuelSignal(vehicle.fuel, comp)) {
+    score += 20;
+    reasons.push("fuel match");
+  } else {
+    reasons.push("fuel weak/mismatch");
+  }
+  if (titleHasGearboxSignal(vehicle.gearbox, comp)) {
+    score += 15;
+    reasons.push("gearbox match");
+  } else {
+    reasons.push("gearbox weak/mismatch");
+  }
+  if (matchesBodyType(vehicle.body_type, comp)) {
+    score += 15;
+    reasons.push("body match/equivalent");
+  } else {
+    reasons.push("body weak/mismatch");
+  }
+
+  const year = comp.year;
+  if (typeof vehicle.year === "number" && typeof year === "number") {
+    if (query.year_from != null && year < query.year_from) {
+      return {
+        id: comp.id ?? null,
+        title: comp.title ?? null,
+        price: comp.price,
+        score,
+        quality: "rejected",
+        reasons: [...reasons, "year below fallback range"],
+        used: false,
+        comp,
+        stage,
+        query,
+      };
+    }
+    if (query.year_to != null && year > query.year_to) {
+      return {
+        id: comp.id ?? null,
+        title: comp.title ?? null,
+        price: comp.price,
+        score,
+        quality: "rejected",
+        reasons: [...reasons, "year above fallback range"],
+        used: false,
+        comp,
+        stage,
+        query,
+      };
+    }
+    if (Math.abs(year - vehicle.year) <= 1) {
+      score += 15;
+      reasons.push("year close");
+    } else {
+      score += 8;
+      reasons.push("year in fallback range");
+    }
+  } else {
+    score += 6;
+    reasons.push("year unknown");
+  }
+
+  const mileage = comp.mileage_mil;
+  if (typeof vehicle.mileage_mil === "number" && typeof mileage === "number") {
+    if (query.milage_from != null && mileage < query.milage_from) {
+      return {
+        id: comp.id ?? null,
+        title: comp.title ?? null,
+        price: comp.price,
+        score,
+        quality: "rejected",
+        reasons: [...reasons, "mileage below fallback range"],
+        used: false,
+        comp,
+        stage,
+        query,
+      };
+    }
+    if (query.milage_to != null && mileage > query.milage_to) {
+      return {
+        id: comp.id ?? null,
+        title: comp.title ?? null,
+        price: comp.price,
+        score,
+        quality: "rejected",
+        reasons: [...reasons, "mileage above fallback range"],
+        used: false,
+        comp,
+        stage,
+        query,
+      };
+    }
+    const diff = Math.abs(mileage - vehicle.mileage_mil);
+    if (diff <= 1_000) {
+      score += 15;
+      reasons.push("mileage close");
+    } else {
+      score += 9;
+      reasons.push("mileage in fallback range");
+    }
+  } else {
+    score += 5;
+    reasons.push("mileage unknown");
+  }
+
+  const powerMatches = [...(comp.title ?? "").matchAll(/\b([1-9][0-9]{1,2})\s*(?:hk|hp)\b/gi)]
+    .map((m) => Number(m[1]))
+    .filter((n) => Number.isFinite(n));
+  if (typeof vehicle.horsepower === "number" && powerMatches.length > 0) {
+    if (powerMatches.some((hp) => Math.abs(hp - vehicle.horsepower!) <= Math.max(25, vehicle.horsepower! * 0.2))) {
+      score += 10;
+      reasons.push("power close");
+    } else {
+      score += 3;
+      reasons.push("power relaxed");
+    }
+  } else {
+    score += 5;
+    reasons.push("power unknown");
+  }
+
+  if (comp.isDealer === true) {
+    score += 10;
+    reasons.push("dealer listing");
+  } else if (comp.isDealer === false) {
+    reasons.push("private listing support only");
+  } else {
+    score += 4;
+    reasons.push("seller unknown");
+  }
+
+  const nonComparable = nonComparableReason(comp);
+  if (nonComparable) {
+    return {
+      id: comp.id ?? null,
+      title: comp.title ?? null,
+      price: comp.price,
+      score,
+      quality: "rejected",
+      reasons: [...reasons, nonComparable],
+      used: false,
+      comp,
+      stage,
+      query,
+    };
+  }
+
+  const quality = score >= 80 ? "strong" : score >= 60 ? "acceptable" : score >= 40 ? "weak" : "rejected";
+  return {
+    id: comp.id ?? null,
+    title: comp.title ?? null,
+    price: comp.price,
+    score,
+    quality,
+    reasons,
+    used: false,
+    comp,
+    stage,
+    query,
+  };
+}
+
+function softFallbackFromEvaluations(evaluations: StageEvaluation[], vehicle: ValuationVehicle): {
+  evaluation: StageEvaluation;
+  scores: ComparableScore[];
+} | null {
+  const bestByKey = new Map<string, ScoredSoftCandidate>();
+  for (const evaluation of evaluations) {
+    for (const comp of evaluation.all) {
+      const scored = scoreSoftComparable(comp, vehicle, evaluation.stage, evaluation.params);
+      const key = comp.id ?? `${comp.price}|${comp.title ?? ""}|${comp.year ?? ""}|${comp.mileage_mil ?? ""}`;
+      const prev = bestByKey.get(key);
+      if (!prev || scored.score > prev.score || (scored.score === prev.score && scored.stage.stage < prev.stage.stage)) {
+        bestByKey.set(key, scored);
+      }
+    }
+  }
+
+  const allScores = [...bestByKey.values()];
+  const candidates = allScores
+    .filter((s) => s.quality !== "rejected")
+    .sort((a, b) => b.score - a.score || a.comp.price - b.comp.price);
+  if (candidates.length === 0) {
+    return {
+      evaluation: {
+        stage: evaluations[evaluations.length - 1]?.stage ?? SEARCH_STAGES[SEARCH_STAGES.length - 1],
+        params: evaluations[evaluations.length - 1]?.params ?? buildSearchParamsForStage(vehicle, SEARCH_STAGES[SEARCH_STAGES.length - 1]),
+        located: evaluations[evaluations.length - 1]?.located ?? { key: null, arr: [], autoDetected: false },
+        sellerField: evaluations.find((e) => e.sellerField)?.sellerField ?? null,
+        all: evaluations.flatMap((e) => e.all),
+        comparable: [],
+        dealers: [],
+        privateCount: 0,
+        sellerTypeAvailable: evaluations.some((e) => e.sellerTypeAvailable),
+        used: [],
+        removed: [],
+        removedCount: 0,
+        softFallback: true,
+      },
+      scores: allScores.map(({ comp: _comp, stage: _stage, query: _query, ...score }) => score),
+    };
+  }
+
+  const dealerCandidates = candidates.filter((s) => s.comp.isDealer === true);
+  const supportCandidates = candidates.filter((s) => s.comp.isDealer !== true && s.score >= 60);
+  const pricedCandidates = (dealerCandidates.length >= 3
+    ? dealerCandidates
+    : [...dealerCandidates, ...supportCandidates])
+    .sort((a, b) => b.score - a.score || a.comp.price - b.comp.price)
+    .slice(0, 12);
+  const cleaned = cleanComparableListings(pricedCandidates.map((s) => s.comp));
+  const usedIds = new Set(cleaned.valid.map((c) => c.id ?? `${c.price}|${c.title ?? ""}|${c.year ?? ""}|${c.mileage_mil ?? ""}`));
+  const scores = allScores.map(({ comp, stage: _stage, query: _query, ...score }) => ({
+    ...score,
+    used: usedIds.has(comp.id ?? `${comp.price}|${comp.title ?? ""}|${comp.year ?? ""}|${comp.mileage_mil ?? ""}`),
+  }));
+  const representative = pricedCandidates[0] ?? candidates[0];
+  const used = cleaned.valid.sort((a, b) => a.price - b.price);
+
+  return {
+    evaluation: {
+      stage: representative.stage,
+      params: representative.query,
+      located: evaluations.find((e) => e.stage.stage === representative.stage.stage)?.located ?? { key: null, arr: [], autoDetected: false },
+      sellerField: evaluations.find((e) => e.sellerField)?.sellerField ?? null,
+      all: evaluations.flatMap((e) => e.all),
+      comparable: candidates.map((s) => s.comp),
+      dealers: candidates.filter((s) => s.comp.isDealer === true).map((s) => s.comp),
+      privateCount: candidates.filter((s) => s.comp.isDealer === false).length,
+      sellerTypeAvailable: evaluations.some((e) => e.sellerTypeAvailable),
+      used,
+      removed: cleaned.removed,
+      removedCount: cleaned.removed.length,
+      softFallback: true,
+    },
+    scores,
+  };
+}
+
 export function median(sortedAsc: number[]): number {
   if (sortedAsc.length === 0) return NaN;
   const mid = Math.floor(sortedAsc.length / 2);
@@ -720,6 +1073,7 @@ type StageEvaluation = {
   removed: { comp: BlocketComp; reason: string }[];
   removedCount: number;
   makeFilterRemoved?: boolean;
+  softFallback?: boolean;
 };
 
 function emptyValuation(note: string, query: BlocketSearchParams, diagnostics?: ValuationResult["diagnostics"]): ValuationResult {
@@ -738,6 +1092,8 @@ function emptyValuation(note: string, query: BlocketSearchParams, diagnostics?: 
     lowerMarketPrice: null,
     utpris: null,
     removedCount: 0,
+    strictComparableCount: 0,
+    softFallbackComparableCount: 0,
     fallbackStage: null,
     searchAttempts: [],
     cheapest: null,
@@ -745,12 +1101,15 @@ function emptyValuation(note: string, query: BlocketSearchParams, diagnostics?: 
     customerOffer: null,
     confidence: 0,
     confidenceLevel: "low",
+    valuationStatus: "needs_review_no_price",
+    manualReviewReason: note,
     dealerAttractivenessScore: 0,
     sanityChecks: { passed: false, blockers: [note], warnings: [] },
     smsEligible: false,
     query,
     note,
     comps: [],
+    comparableScores: [],
     diagnostics,
   };
 }
@@ -822,6 +1181,7 @@ function runSanityChecks(args: {
 
   if (args.offer.customerHigh >= args.offer.referencePrice) blockers.push("Inpris är högre än eller lika med Utpris.");
   if (marginAtHighOffer < MIN_AUTO_MARGIN) blockers.push(`Marginal efter högsta Inpris är för låg (${round100(marginAtHighOffer)} kr).`);
+  if (args.evaluation.softFallback) blockers.push("Värderingen bygger på soft fallback och kräver manuell granskning.");
   if (args.evaluation.used.length < MIN_COMPARABLE) blockers.push("Färre än 3 giltiga jämförbara annonser användes.");
   if (!args.evaluation.sellerTypeAvailable) blockers.push("Blocket-svaret kunde inte säkert särskilja handlarannonser från privatannonser.");
   if (args.confidenceLevel === "low") blockers.push("Värderingsförtroende är Low.");
@@ -870,7 +1230,28 @@ export async function valuateWithBlocket(
     const params = buildSearchParamsForStage(vehicle, stage, opts, includeMake);
     const payload = await fetcher(params);
     const located = locateListingArray(payload);
-    const all = extractComps(payload);
+    let all = extractComps(payload);
+    let pagesFetched = 1;
+    const shouldFetchMorePages = !opts.fetcher && located.arr.length >= 45;
+    while (shouldFetchMorePages && pagesFetched < 3) {
+      const comparableSoFar = filterToComparable(all, vehicle, {
+        ...opts,
+        yearFrom: params.year_from,
+        yearTo: params.year_to,
+        mileageFrom: params.milage_from,
+        mileageTo: params.milage_to,
+        relaxVersion: stage.relaxVersion,
+      });
+      if (comparableSoFar.length >= TARGET_COMPARABLE) break;
+      pagesFetched += 1;
+      const nextPayload = await fetcher({ ...params, page: pagesFetched });
+      const nextLocated = locateListingArray(nextPayload);
+      if (nextLocated.arr.length === 0) break;
+      const nextComps = extractComps(nextPayload);
+      const before = all.length;
+      all = dedupeComps([...all, ...nextComps]);
+      if (all.length === before || nextLocated.arr.length < 45) break;
+    }
     const comparable = filterToComparable(all, vehicle, {
       ...opts,
       yearFrom: params.year_from,
@@ -904,6 +1285,7 @@ export async function valuateWithBlocket(
   };
 
   const attempts: ValuationResult["searchAttempts"] = [];
+  const evaluations: StageEvaluation[] = [];
   let best: StageEvaluation | null = null;
   let selected: StageEvaluation | null = null;
 
@@ -936,6 +1318,7 @@ export async function valuateWithBlocket(
     }
 
     attempts.push(summarizeAttempt(evaluation));
+    evaluations.push(evaluation);
     best = betterEvaluation(best, evaluation);
     if (evaluation.used.length >= TARGET_COMPARABLE) {
       selected = evaluation;
@@ -950,15 +1333,31 @@ export async function valuateWithBlocket(
     return result;
   }
 
+  const strictSelected = selected;
+  let comparableScores: ComparableScore[] = [];
+  if (selected.used.length < minComparable) {
+    const soft = softFallbackFromEvaluations(evaluations, vehicle);
+    if (soft) {
+      comparableScores = soft.scores;
+      if (soft.evaluation.used.length > selected.used.length || selected.used.length === 0) {
+        selected = soft.evaluation;
+      }
+    }
+  }
+
   const { all, comparable, dealers, privateCount, sellerTypeAvailable, sellerField, located } = selected;
   const used = [...selected.used].sort((a, b) => a.price - b.price);
-  const sellerNote = sellerTypeAvailable
-    ? `Blocket exponerade säljartyp (${sellerField ?? "okänt fält"}). Värderingen använder endast ${dealers.length} jämförbara handlarannonser; ${privateCount} privatannonser exkluderades.`
+  const strictComparableCount = strictSelected.used.length;
+  const softFallbackComparableCount = selected.softFallback ? used.length : 0;
+  const sellerNote = selected.softFallback
+    ? `Soft fallback användes för intern värdering. ${used.length} soft-scoreade jämförbara annonser används; SMS blockeras för manuell granskning.`
+    : sellerTypeAvailable
+      ? `Blocket exponerade säljartyp (${sellerField ?? "okänt fält"}). Värderingen använder endast ${dealers.length} jämförbara handlarannonser; ${privateCount} privatannonser exkluderades.`
     : `Handlare/privat kunde inte särskiljas i Blocket-svaret. Resultatet kan visas internt men blockeras från auto-SMS.`;
 
-  if (used.length < minComparable) {
+  if (used.length < 1) {
     const result = emptyValuation(
-      `För få giltiga jämförbara annonser efter fallback: ${used.length} använda av ${all.length} träffar. ${sellerNote}`,
+      `För få användbara jämförbara annonser efter strikt och soft fallback: ${used.length} använda av ${all.length} träffar. ${sellerNote}`,
       selected.params,
       { listingKey: located.key, sellerField },
     );
@@ -971,9 +1370,12 @@ export async function valuateWithBlocket(
       sellerTypeAvailable,
       sampleSize: used.length,
       removedCount: selected.removedCount,
+      strictComparableCount,
+      softFallbackComparableCount,
       fallbackStage: selected.stage.stage,
       searchAttempts: attempts,
       comps: used,
+      comparableScores,
     };
   }
 
@@ -982,13 +1384,29 @@ export async function valuateWithBlocket(
   const marketLow = round100(percentile(prices, 0.25));
   const marketHigh = round100(percentile(prices, 0.75));
   const confidence = confidenceFor(selected, marketLow, marketHigh);
+  if (selected.softFallback) {
+    const usedKeys = new Set(used.map((c) => c.id ?? `${c.price}|${c.title ?? ""}|${c.year ?? ""}|${c.mileage_mil ?? ""}`));
+    const usedScores = comparableScores
+      .filter((s) => s.used || usedKeys.has(s.id ?? `${s.price}|${s.title ?? ""}`))
+      .map((s) => s.score);
+    const avgScore = usedScores.length > 0
+      ? usedScores.reduce((sum, score) => sum + score, 0) / usedScores.length
+      : 45;
+    confidence.level = used.length >= 3 && avgScore >= 65 ? "medium" : "low";
+    confidence.score = Number(Math.max(0.2, Math.min(0.65, avgScore / 100 - 0.18)).toFixed(2));
+  } else if (used.length < MIN_COMPARABLE) {
+    confidence.level = "low";
+    confidence.score = Math.min(confidence.score, 0.45);
+  }
   const offer = calculateCustomerOffer(used, {
     marginAmount: opts.marginAmount,
-    allowSingleListing: opts.allowSingleComparable,
+    allowSingleListing: opts.allowSingleComparable || used.length < MIN_COMPARABLE || selected.softFallback,
     reconditioningBuffer: opts.reconditioningBuffer,
     riskBuffer: opts.riskBuffer,
     adminTransportBuffer: opts.adminTransportBuffer,
     negotiationBuffer: opts.negotiationBuffer,
+    uncertaintyDiscountRate:
+      used.length < MIN_COMPARABLE || selected.softFallback ? INTERNAL_UNCERTAINTY_DISCOUNT_RATE : null,
     confidenceLevel: confidence.level,
     marketMedian,
   });
@@ -1016,9 +1434,18 @@ export async function valuateWithBlocket(
     spread: confidence.spread,
   });
   const smsEligible =
+    !selected.softFallback &&
     sanityChecks.passed &&
     (confidence.level === "high" || confidence.level === "medium") &&
     offerResult.customerHigh < offerResult.referencePrice;
+  const manualReviewReason = smsEligible
+    ? null
+    : sanityChecks.blockers.length > 0
+      ? sanityChecks.blockers.join(" ")
+      : selected.softFallback
+        ? "Soft fallback kräver manuell granskning."
+        : "Värderingen kräver manuell granskning.";
+  const valuationStatus = smsEligible ? "ready_to_send" : "needs_review_with_price";
 
   return {
     ok: true,
@@ -1035,6 +1462,8 @@ export async function valuateWithBlocket(
     lowerMarketPrice: offer.lowerMarketPrice,
     utpris: offer.referencePrice,
     removedCount: selected.removedCount,
+    strictComparableCount,
+    softFallbackComparableCount,
     fallbackStage: selected.stage.stage,
     searchAttempts: attempts,
     cheapest: toRef(used[0]),
@@ -1042,6 +1471,8 @@ export async function valuateWithBlocket(
     customerOffer: offerResult,
     confidence: confidence.score,
     confidenceLevel: confidence.level,
+    valuationStatus,
+    manualReviewReason,
     dealerAttractivenessScore: dealerScore,
     sanityChecks,
     smsEligible,
@@ -1053,6 +1484,7 @@ export async function valuateWithBlocket(
       `Confidence: ${confidence.level}.` +
       (sanityChecks.blockers.length > 0 ? ` Auto-SMS blockerat: ${sanityChecks.blockers.join(" ")}` : ""),
     comps: used,
+    comparableScores,
     diagnostics: { listingKey: located.key, sellerField },
   };
 }

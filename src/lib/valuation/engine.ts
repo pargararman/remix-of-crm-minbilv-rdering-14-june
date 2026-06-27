@@ -22,6 +22,7 @@ export interface OfferBufferConfig {
   riskBuffer?: number | null;
   adminTransportBuffer?: number | null;
   negotiationBuffer?: number | null;
+  uncertaintyDiscountRate?: number | null;
 }
 
 export interface CustomerOfferBreakdown {
@@ -178,11 +179,25 @@ export function calculateCustomerOffer(
   if (compsSortedAsc.length < 1) return null;
 
   const sorted = [...compsSortedAsc].sort((a, b) => a.price - b.price);
-  const lowerMarket = calculateLowerMarketUtpris(sorted) ?? {
-    utpris: round1000(sorted[0].price),
-    selected: sorted.slice(0, 1),
-    method: "billigaste giltiga annonsen (endast tillåtet för manuell fallback)",
-  };
+  const lowerMarket = calculateLowerMarketUtpris(sorted) ?? (() => {
+    const selected = sorted.slice(0, Math.min(2, sorted.length));
+    const rawReference = selected.length === 1 ? selected[0].price : average(selected.map((c) => c.price));
+    const discountRate =
+      typeof opts.uncertaintyDiscountRate === "number" &&
+      Number.isFinite(opts.uncertaintyDiscountRate) &&
+      opts.uncertaintyDiscountRate > 0
+        ? opts.uncertaintyDiscountRate
+        : 0;
+    const uncertaintyDiscount = discountRate > 0 ? Math.max(5_000, rawReference * discountRate) : 0;
+    return {
+      utpris: round1000(clampMin0(rawReference - uncertaintyDiscount)),
+      selected,
+      method:
+        selected.length === 1
+          ? `billigaste giltiga annonsen med osäkerhetsavdrag ${Math.round(discountRate * 100)}% (endast intern manuell fallback)`
+          : `snitt av ${selected.length} giltiga annonser med osäkerhetsavdrag ${Math.round(discountRate * 100)}% (endast intern manuell fallback)`,
+    };
+  })();
   const referencePrice = lowerMarket.utpris;
   const referenceListing = lowerMarket.selected[lowerMarket.selected.length - 1] ?? sorted[0];
   const referenceRank = lowerMarket.selected.length;

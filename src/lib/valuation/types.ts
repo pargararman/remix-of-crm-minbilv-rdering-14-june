@@ -32,6 +32,19 @@ export interface BlocketComp {
 }
 
 export type ValuationConfidenceLevel = "high" | "medium" | "low";
+export type ValuationStatus = "ready_to_send" | "needs_review_with_price" | "needs_review_no_price";
+
+export type ComparableQuality = "strong" | "acceptable" | "weak" | "rejected";
+
+export interface ComparableScore {
+  id?: string | null;
+  title?: string | null;
+  price: number;
+  score: number;
+  quality: ComparableQuality;
+  reasons: string[];
+  used: boolean;
+}
 
 export interface SearchAttemptSummary {
   stage: number;
@@ -106,6 +119,10 @@ export interface ValuationResult {
   utpris: number | null;
   /** Number of parsed comparables removed by quality/outlier filters. */
   removedCount: number;
+  /** Strong strict comparable count before any soft internal-only fallback. */
+  strictComparableCount: number;
+  /** Soft-scored fallback comparable count used only for internal/manual-review pricing. */
+  softFallbackComparableCount: number;
   /** Fallback stage used for the valuation (1-4), if any search ran. */
   fallbackStage: number | null;
   /** All search attempts considered before the selected result. */
@@ -118,6 +135,8 @@ export interface ValuationResult {
   /** 0..1 confidence proxy derived from sample size and price spread. */
   confidence: number;
   confidenceLevel: ValuationConfidenceLevel;
+  valuationStatus: ValuationStatus;
+  manualReviewReason: string | null;
   dealerAttractivenessScore: number;
   sanityChecks: {
     passed: boolean;
@@ -131,6 +150,8 @@ export interface ValuationResult {
   note?: string;
   /** Used comps sorted cheapest first. */
   comps: BlocketComp[];
+  /** Scored comparable audit rows, including rejected soft-fallback candidates where available. */
+  comparableScores: ComparableScore[];
   /** Diagnostics for Blocket shape/403 debugging. */
   diagnostics?: {
     listingKey?: string | null;

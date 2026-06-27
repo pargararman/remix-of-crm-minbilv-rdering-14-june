@@ -70,6 +70,13 @@ export function BlocketValuationResult({ result, isPending, isError, regnr, onAp
         <span className={`text-[11px] rounded px-2 py-0.5 ${confidenceTone}`}>
           {result.confidenceLevel.toUpperCase()} · stage {result.fallbackStage ?? "—"} · {result.smsEligible ? "SMS OK" : "SMS stopp"}
         </span>
+        <span className="text-[11px] rounded px-2 py-0.5 bg-background border border-border">
+          {result.valuationStatus === "ready_to_send"
+            ? "Klar för SMS"
+            : result.valuationStatus === "needs_review_with_price"
+              ? "Pris kräver review"
+              : "Review utan pris"}
+        </span>
         <span className="ml-auto text-[11px] text-muted-foreground">via blocket.se · server-side</span>
       </div>
 
@@ -97,6 +104,11 @@ export function BlocketValuationResult({ result, isPending, isError, regnr, onAp
           {!result.smsEligible && result.sanityChecks.blockers.length > 0 && (
             <p className="rounded-md bg-destructive/5 border border-destructive/20 p-2 text-[11px] leading-relaxed text-destructive">
               Auto-SMS stoppas: {result.sanityChecks.blockers.join(" ")}
+            </p>
+          )}
+          {result.manualReviewReason && (
+            <p className="rounded-md bg-amber-500/10 border border-amber-500/25 p-2 text-[11px] leading-relaxed text-amber-700 dark:text-amber-300">
+              Manuell granskning: {result.manualReviewReason}
             </p>
           )}
         </div>
